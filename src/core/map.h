@@ -54,7 +54,6 @@ class QWidget;
 namespace OpenOrienteering {
 
 class CombinedSymbol;
-class FileFormat;
 class Georeferencing;
 class LineSymbol;
 class MapColor;
@@ -155,96 +154,82 @@ public:
 	
 	
 	/**
-	 * Saves the map to the given file.
-	 * 
-	 * If a MapView is given, is state will be saved.
-	 */
-	bool saveTo(const QString& path, const FileFormat* format, MapView *view);
-	
-	/**
-	 * Exports the map to the given file and format.
-	 * 
-	 * If a MapView is given, is state will be saved.
-	 * If a FileFormat is given, it will be used, otherwise the file format
-	 * is determined from the filename.
-	 * 
-	 * If the map was modified, it will still be considered modified after
-	 * successful export.
-	 */
-	bool exportTo(const QString& path,
-	              const FileFormat* format = nullptr,
-	              MapView* view = nullptr);
-	
-	/**
 	 * Attempts to load the map from the specified path. Returns true on success.
 	 * 
-	 * @param path The file path to load the map from.
-	 * @param dialog_parent The parent widget for all dialogs.
-	 *     This should never be nullptr in a QWidgets application.
-	 * @param view If not nullptr, restores this map view.
-	 * @param load_symbols_only Loads only symbols from the chosen file.
-	 *     Useful to load symbol sets.
-	 * @param show_error_messages Whether to show import errors and warnings.
-	 */
-	bool loadFrom(const QString& path,
-	              QWidget* dialog_parent,
-	              MapView* view = nullptr,
-	              bool load_symbols_only = false, bool show_error_messages = true);
-	
-	/**
-	 * Imports the other map into this map with the following strategy:
-	 *  - if the other map contains objects, import all objects with the minimum
-	 *    amount of colors and symbols needed to display them
-	 *  - if the other map does not contain objects, import all symbols with
-	 *    the minimum amount of colors needed to display them
-	 *  - if the other map does neither contain objects nor symbols, import all colors
+	 * This is a convenience function used by tests. Normally, a importer should be
+	 * used explicitly.
 	 * 
-	 * WARNING: this method potentially changes the 'other' map if the
-	 *          scales differ (by rescaling to fit this map's scale)!
+	 * @param path The file path to load the map from.
+	 * @param view If not nullptr, restores this map view.
 	 */
-	void importMap(
-	        const Map* other,
-	        ImportMode mode,
-	        QWidget* dialog_parent = nullptr,
-	        std::vector<bool>* filter = nullptr,
-	        int symbol_insert_pos = -1,
-	        bool merge_duplicate_symbols = true,
-	        QHash<const Symbol*, Symbol*>* out_symbol_map = nullptr
-	);
+	bool loadFrom(const QString& path, MapView* view = nullptr);
+	
 	
 	/**
-	 * Imports another map into this map with the following strategy:
-	 *  - If the other map contains objects, import all objects with the
-	 *    minimum amount of colors and symbols needed to display them.
-	 *  - If the other map does not contain objects, import all symbols
-	 *    with the minimum amount of colors needed to display them.
-	 *  - If the other map does neither contain objects nor symbols,
-	 *    import all colors.
-	 * The transform is applied to all imported objects.
+	 * Imports another map into this map.
+	 * 
+	 * If the Map::GeorefImport mode flag is set, this overload will attempt to
+	 * calculate a transformation based on the maps' georeferencing.
+	 * All further processsing is delegated to the other overload.
+	 * 
 	 */
 	QHash<const Symbol*, Symbol*> importMap(
 	        const Map& imported_map,
 	        ImportMode mode,
 	        std::vector<bool>* filter = nullptr,
 	        int symbol_insert_pos = -1,
-	        bool merge_duplicate_symbols = true,
-	        const QTransform& transform = {}
+	        bool merge_duplicate_symbols = true
+	);
+	
+	/**
+	 * Imports another map into this map.
+	 * 
+	 * The amount of imported elements is controlled by the mode argument which
+	 * is a combination of an enumeration of basic modes (ColorImport,
+	 * SymbolImport, ObjectImport) and the flags (MinimalImport).
+	 * - ObjectImport: Import objects, symbols and colors.
+	 *   If the MinimalImport flag is set, symbols and colors not used
+	 *   by the imported objects are ignored.
+	 *   The filter argument is not used.
+	 * - SymbolImport: Import symbols and colors.
+	 *   If the MinimalImport flag is set, the filter argument may be used to
+	 *   select a subset of the symbols, and colors not used by the imported
+	 *   symbols are ignored.
+	 * - ColorImport: Import colors.
+	 *   If the MinimalImport flag is set, the filter argument may be used to
+	 *   select a subset of the colors.
+	 * 
+	 * This overload ignores the Map::GeorefImport mode flag. It only uses the
+	 * given transformation. It is applied to all imported objects.
+	 * No other adjustment of object positions and no scaling of symbol sizes
+	 * (with respect to possible different map scales) is performed.
+	 */
+	QHash<const Symbol*, Symbol*> importMap(
+	        const Map& imported_map,
+	        ImportMode mode,
+	        const QTransform& transform,
+	        std::vector<bool>* filter = nullptr,
+	        int symbol_insert_pos = -1,
+	        bool merge_duplicate_symbols = true
 	);
 	
 	
 	/**
-	 * Serializes the map directly into the given IO device in a known format.
+	 * Serializes the map directly to the given IO device, in a fixed format.
+	 * 
 	 * This can be imported again using importFromIODevice().
 	 * Returns true if successful.
 	 */
-	bool exportToIODevice(QIODevice* stream);
+	bool exportToIODevice(QIODevice& device) const;
 	
 	/**
-	 * Loads the map directly from the given IO device,
-	 * where the data must have been written by exportToIODevice().
+	 * Loads the map directly from the given IO device.
+	 * 
+	 * The data must have been written by exportToIODevice() (or at least use
+	 * the same format.)
 	 * Returns true if successful.
 	 */
-	bool importFromIODevice(QIODevice* stream);
+	bool importFromIODevice(QIODevice& device);
 	
 	
 	/**
@@ -937,6 +922,11 @@ public:
 	 * Applies an operation on all objects which match a particular condition.
 	 */
 	void applyOnMatchingObjects(const std::function<void (Object*)>& operation, const std::function<bool (const Object*)>& condition);
+	
+	/**
+	 * Applies a function on all objects which match a particular condition.
+	 */
+	void applyOnMatchingObjects(const std::function<void (const Object*)>& operation, const std::function<bool (const Object*)>& condition) const;
 	
 	/**
 	 * Applies an operation on all objects which match a particular condition.

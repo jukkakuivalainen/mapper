@@ -47,6 +47,7 @@
 #include "core/symbols/text_symbol.h"
 #include "fileformats/xml_file_format.h"
 #include "fileformats/file_import_export.h"
+#include "fileformats/ocd_file_format.h"
 #include "templates/template.h"
 #include "templates/template_image.h"
 #include "templates/template_map.h"
@@ -78,21 +79,21 @@ FileFormat::ImportSupportAssumption OCAD8FileFormat::understands(const char* buf
 }
 
 
-std::unique_ptr<Importer> OCAD8FileFormat::makeImporter(QIODevice* stream, Map *map, MapView *view) const
+std::unique_ptr<Importer> OCAD8FileFormat::makeImporter(const QString& path, Map *map, MapView *view) const
 {
-	return std::make_unique<OCAD8FileImport>(stream, map, view);
+	return std::make_unique<OCAD8FileImport>(path, map, view);
 }
 
-std::unique_ptr<Exporter> OCAD8FileFormat::makeExporter(QIODevice* stream, Map* map, MapView* view) const
+std::unique_ptr<Exporter> OCAD8FileFormat::makeExporter(const QString& path, const Map* map, const MapView* view) const
 {
-	return std::make_unique<OCAD8FileExport>(stream, map, view);
+	return std::make_unique<OCAD8FileExport>(path, map, view);
 }
 
 
 
 // ### OCAD8FileImport ###
 
-OCAD8FileImport::OCAD8FileImport(QIODevice* stream, Map* map, MapView* view) : Importer(stream, map, view), file(nullptr)
+OCAD8FileImport::OCAD8FileImport(const QString& path, Map* map, MapView* view) : Importer(path, map, view), file(nullptr)
 {
     ocad_init();
     const QByteArray enc_name = Settings::getInstance().getSetting(Settings::General_Local8BitEncoding).toByteArray();
@@ -116,25 +117,28 @@ bool OCAD8FileImport::isRasterImageFile(const QString &filename)
 	return QImageReader::supportedImageFormats().contains(extension.toLatin1());
 }
 
-void OCAD8FileImport::import(bool load_symbols_only)
+bool OCAD8FileImport::importImplementation()
 {
     //qint64 start = QDateTime::currentMSecsSinceEpoch();
 	
-	u32 size = stream->bytesAvailable();
+	auto& device = *this->device();
+	u32 size = device.bytesAvailable();
 	u8* buffer = (u8*)malloc(size);
 	if (!buffer)
 		throw FileFormatException(tr("Could not allocate buffer."));
-	if (stream->read((char*)buffer, size) != size)
-		throw FileFormatException(::OpenOrienteering::Importer::tr("Could not read file: %1").arg(stream->errorString()));
+	if (device.read((char*)buffer, size) != size)
+		throw FileFormatException(device.errorString());
 	int err = ocad_file_open_memory(&file, buffer, size);
-    if (err != 0) throw FileFormatException(::OpenOrienteering::Importer::tr("Could not read file: %1").arg(tr("libocad returned %1").arg(err)));
+    if (err != 0) throw FileFormatException(tr("libocad returned %1").arg(err));
 	
 	if (file->header->major <= 5 || file->header->major >= 9)
-		throw FileFormatException(::OpenOrienteering::Importer::tr("Could not read file: %1").arg(tr("OCAD files of version %1 are not supported!").arg(file->header->major)));
+		throw FileFormatException(tr("OCAD files of version %1 are not supported!").arg(file->header->major));
 
     //qDebug() << "file version is" << file->header->major << ", type is"
     //         << ((file->header->ftype == 2) ? "normal" : "other");
     //qDebug() << "map scale is" << file->setup->scale;
+
+	map->setProperty(OcdFileFormat::versionProperty(), file->header->major);
 
 	// Scale and georeferencing parameters
 	Georeferencing georef;
@@ -292,7 +296,7 @@ void OCAD8FileImport::import(bool load_symbols_only)
         }
     }
 
-    if (!load_symbols_only)
+    if (!loadSymbolsOnly())
 	{
 		// Load objects
 
@@ -370,6 +374,8 @@ void OCAD8FileImport::import(bool load_symbols_only)
 
 	emit map->currentMapPartIndexChanged(map->current_part_index);
 	emit map->currentMapPartChanged(map->getPart(map->current_part_index));
+	
+	return true;
 }
 
 void OCAD8FileImport::setStringEncodings(const char *narrow, const char *wide) {
@@ -1543,8 +1549,8 @@ double OCAD8FileImport::convertTemplateScale(double ocad_scale)
 
 // ### OCAD8FileExport ###
 
-OCAD8FileExport::OCAD8FileExport(QIODevice* stream, Map* map, MapView* view)
- : Exporter(stream, map, view),
+OCAD8FileExport::OCAD8FileExport(const QString& path, const Map* map, const MapView* view)
+ : Exporter(path, map, view),
    uses_registration_color(false),
    file(nullptr)
 {
@@ -1560,7 +1566,7 @@ OCAD8FileExport::~OCAD8FileExport()
 	delete origin_point_object;
 }
 
-void OCAD8FileExport::doExport()
+bool OCAD8FileExport::exportImplementation()
 {
 	uses_registration_color = map->isColorUsedByASymbol(map->getRegistrationColor());
 	if (map->getNumColors() > (uses_registration_color ? 255 : 256))
@@ -1568,7 +1574,7 @@ void OCAD8FileExport::doExport()
 	
 	// Create struct in memory
 	int err = ocad_file_new(&file);
-	if (err != 0) throw FileFormatException(::OpenOrienteering::Exporter::tr("Could not create new file: %1").arg(tr("libocad returned %1").arg(err)));
+	if (err != 0) throw FileFormatException(tr("libocad returned %1").arg(err));
 	
 	// Check for a neccessary offset (and add related warnings early).
 	auto area_offset = calculateAreaOffset();
@@ -1840,8 +1846,33 @@ void OCAD8FileExport::doExport()
 		const Template* temp = map->getTemplate(i);
 		
 		QString template_path = temp->getTemplatePath();
-		if (qstrcmp(temp->getTemplateType(), "TemplateImage") == 0
-		    || QFileInfo(template_path).suffix().compare(QLatin1String("ocd"), Qt::CaseInsensitive) == 0)
+		
+		auto supported_by_ocd = false;
+		if (qstrcmp(temp->getTemplateType(), "TemplateImage") == 0)
+		{
+			supported_by_ocd = true;
+			
+			if (temp->isTemplateGeoreferenced())
+			{
+				if (temp->getTemplateState() == Template::Unloaded)
+				{
+					// Try to load the template, so that the positioning gets set.
+					const_cast<Template*>(temp)->loadTemplateFile(false);
+				}
+				
+				if (temp->getTemplateState() != Template::Loaded)
+				{
+					addWarning(tr("Unable to save correct position of missing template: \"%1\"")
+					           .arg(temp->getTemplateFilename()));
+				}
+			}
+		}
+		else if (QFileInfo(template_path).suffix().compare(QLatin1String("ocd"), Qt::CaseInsensitive) == 0)
+		{
+			supported_by_ocd = true;
+		}
+		
+		if (supported_by_ocd)
 		{
 			// FIXME: export template view parameters
 			
@@ -1860,10 +1891,10 @@ void OCAD8FileExport::doExport()
 			template_path.replace(QLatin1Char('/'), QLatin1Char('\\'));
 			
 			QString string;
-			auto template_path_8bit = encoding_1byte->fromUnicode(template_path);
-			string.sprintf("%s\ts%d\tx%d\ty%d\ta%f\tu%f\tv%f\td%d\tp%d\tt%d\to%d",
-				template_path_8bit.data(), s, x, y, a, u, v, d, p, t, o
+			string.sprintf("\ts%d\tx%d\ty%d\ta%f\tu%f\tv%f\td%d\tp%d\tt%d\to%d",
+				s, x, y, a, u, v, d, p, t, o
 			);
+			string.prepend(template_path);
 			
 			OCADStringEntry* entry = ocad_string_entry_new(file, string.length() + 1);
 			entry->type = 8;
@@ -1875,9 +1906,10 @@ void OCAD8FileExport::doExport()
 		}
 	}
 	
-	stream->write((char*)file->buffer, file->size);
+	device()->write((char*)file->buffer, file->size);
 	
 	ocad_file_close(file);
+	return true;
 }
 
 
@@ -1907,7 +1939,7 @@ MapCoord OCAD8FileExport::calculateAreaOffset()
 			{
 				addWarning(tr("Coordinates are adjusted to fit into the OCAD 8 drawing area (-2 m ... 2 m)."));
 				std::size_t count = 0;
-				auto calculate_average_center = [&area_offset, &count](Object* object)
+				auto calculate_average_center = [&area_offset, &count](const Object* object)
 				{
 					area_offset *= qreal(count)/qreal(count+1);
 					++count;

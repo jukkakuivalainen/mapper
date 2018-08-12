@@ -857,26 +857,23 @@ void SymbolRenderWidget::copySymbols()
 {
 	// Create map containing all colors and the selected symbols.
 	// Copying all colors improves preservation of relative order during paste.
-	Map* copy_map = new Map();
-	copy_map->setScaleDenominator(map->getScaleDenominator());
-
-	copy_map->importMap(map, Map::ColorImport, this);
+	Map copy_map;
+	copy_map.setScaleDenominator(map->getScaleDenominator());
+	copy_map.importMap(*map, Map::ColorImport);
 	
 	std::vector<bool> selection(map->getNumSymbols(), false);
 	for (auto symbol_index : selected_symbols)
 		selection[symbol_index] = true;
 	
-	copy_map->importMap(map, Map::MinimalSymbolImport, this, &selection);
+	copy_map.importMap(*map, Map::MinimalSymbolImport, &selection);
 	
 	// Save map to memory
 	QBuffer buffer;
-	if (!copy_map->exportToIODevice(&buffer))
+	if (!copy_map.exportToIODevice(buffer))
 	{
-		delete copy_map;
 		QMessageBox::warning(nullptr, tr("Error"), tr("An internal error occurred, sorry!"));
 		return;
 	}
-	delete copy_map;
 	
 	// Put buffer into clipboard
 	QMimeData* mime_data = new QMimeData();
@@ -895,22 +892,39 @@ void SymbolRenderWidget::pasteSymbols()
 	// Get buffer from clipboard
 	QByteArray byte_array = QApplication::clipboard()->mimeData()->data(MimeType::OpenOrienteeringSymbols());
 	QBuffer buffer(&byte_array);
-	buffer.open(QIODevice::ReadOnly);
 	
 	// Create map from buffer
-	Map* paste_map = new Map();
-	if (!paste_map->importFromIODevice(&buffer))
+	Map paste_map;
+	if (!paste_map.importFromIODevice(buffer))
 	{
 		QMessageBox::warning(nullptr, tr("Error"), tr("An internal error occurred, sorry!"));
 		return;
 	}
 	
+	if (paste_map.getScaleDenominator() != map->getScaleDenominator())
+	{
+		/// \todo Adjust message to this particular action, and remove Map context.
+		///       See also MapEditor::importMap.
+		int answer = QMessageBox::question(
+		                 window(),
+		                 Map::tr("Question"),
+		                 Map::tr("The scale of the imported data is 1:%1 "
+		                         "which is different from this map's scale of 1:%2.\n\n"
+		                         "Rescale the imported data?")
+		                 .arg(QLocale().toString(paste_map.getScaleDenominator()),
+		                      QLocale().toString(map->getScaleDenominator())),
+		                 QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::Yes);
+		if (answer == QMessageBox::Cancel)
+			return;
+		
+		paste_map.changeScale(map->getScaleDenominator(), {0, 0}, answer == QMessageBox::Yes, false, false, false);
+	}
+	
 	// Ensure that a change in selection is detected
 	selectSingleSymbol(-1);
-	
+		
 	// Import pasted map
-	map->importMap(paste_map, Map::MinimalSymbolImport, this, nullptr, current_symbol_index, false);
-	delete paste_map;
+	map->importMap(paste_map, Map::MinimalSymbolImport, nullptr, current_symbol_index, false);
 	
 	selectSingleSymbol(current_symbol_index);
 }

@@ -67,9 +67,12 @@ function(add_test_helper testname autorun)
 	target_link_libraries(${testname}
 	  PROJ4::proj
 	  Qt5::Test
-	  Qt5::Widgets
+	  Qt5::Gui
 	  Polyclipping::Polyclipping
 	)
+	if("${ARGN}" MATCHES "crs_template_implementation")
+		target_link_libraries(${testname} Qt5::Widgets)
+	endif()
 	if(NOT manual_test)
 		configure_file(TESTNAME-RUN.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/${testname}-RUN.cmake @ONLY)
 		add_test(${testname} ${CMAKE_COMMAND} -P ${testname}-RUN.cmake)
@@ -113,6 +116,7 @@ function(add_system_test testname)
 	target_link_libraries(${testname}
 	  Mapper_Common
 	  libocad
+	  Qt5::Widgets
 	)
 endfunction()
 
@@ -129,6 +133,16 @@ add_unit_test(autosave_t MANUAL ../src/core/autosave
 	../src/settings
 )
 add_unit_test(encoding_t ../src/util/encoding)
+add_unit_test(georef_ocd_mapping_t
+	../src/settings
+	../src/gui/util_gui
+	../src/gui/widgets/crs_param_widgets
+	../src/core/georeferencing
+	../src/core/crs_template
+	../src/core/crs_template_implementation
+	../src/fileformats/ocd_georef_fields
+	../src/fileformats/file_format
+)
 add_unit_test(georeferencing_t ../src/core/georeferencing
 	../src/settings
 	../src/core/crs_template

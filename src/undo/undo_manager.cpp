@@ -1,6 +1,6 @@
 /*
  *    Copyright 2012, 2013 Thomas Schöps
- *    Copyright 2014-2017 Kai Pastor
+ *    Copyright 2014-2018 Kai Pastor
  *
  *    This file is part of OpenOrienteering.
  *
@@ -44,20 +44,6 @@ namespace OpenOrienteering {
 Q_STATIC_ASSERT(UndoManager::max_undo_steps < std::numeric_limits<int>::max());
 
 
-namespace
-{
-
-template <class iterator>
-void saveSteps(QXmlStreamWriter& xml, iterator first, iterator last)
-{
-	for (auto step = first; step != last; ++step)
-		(*step)->save(xml);
-}
-
-}  // namespace
-
-
-
 // ### UndoManager::State ###
 
 UndoManager::State::State(UndoManager const *manager)
@@ -81,6 +67,13 @@ UndoManager::UndoManager(Map* map)
 , loaded_state_index(-1)
 {
 	undo_steps.reserve(max_undo_steps + 1);  // +1 is for push before trim
+	if (map)
+	{
+		connect(map, &Map::symbolDeleted, this, [this]() {
+			validateUndoSteps();
+			validateRedoSteps();
+		}, Qt::QueuedConnection);
+	}
 }
 
 
@@ -295,7 +288,7 @@ void UndoManager::updateMapState(const UndoStep *step) const
 
 void UndoManager::clearRedoSteps()
 {
-	if (canRedo())
+	if (current_index < int(undo_steps.size()))
 	{
 		undo_steps.erase(begin(undo_steps) + StepList::difference_type(current_index), end(undo_steps));
 		if (clean_state_index > StepList::difference_type(current_index))
@@ -310,14 +303,16 @@ void UndoManager::clearRedoSteps()
 
 void UndoManager::validateUndoSteps()
 {
-	if (canUndo())
+	if (current_index > 0)
 	{
 		int num_removed_undo_steps = 0;
 		if (current_index > int(max_undo_steps))
 			num_removed_undo_steps += current_index - int(max_undo_steps);
 		
+		auto rfirst = undo_steps.rend() - StepList::difference_type(current_index);
+		Q_ASSERT(rfirst->get() == nextUndoStep());
 		auto rlast = undo_steps.rend() - num_removed_undo_steps;
-		auto rfirst = std::find_if(undo_steps.rbegin(), rlast, [](auto&& step) { return !step->isValid(); });
+		rfirst = std::find_if(rfirst, rlast, [](auto&& step) { return !step->isValid(); });
 		if (rfirst != rlast)
 			num_removed_undo_steps += std::distance(rfirst, rlast);
 		
@@ -341,7 +336,7 @@ void UndoManager::validateUndoSteps()
 
 void UndoManager::validateRedoSteps()
 {
-	if (canRedo())
+	if (current_index < int(undo_steps.size()))
 	{
 		auto num_removed_redo_steps = StepList::difference_type(0);
 		
@@ -388,25 +383,46 @@ void UndoManager::emitChangedSignals(const UndoManager::State& old_state)
 
 
 
-void UndoManager::saveUndo(QXmlStreamWriter& xml)
+void UndoManager::saveUndo(QXmlStreamWriter& xml) const
 {
-	XmlElementWriter undo_element(xml, QLatin1String("undo"));
-	
-	validateUndoSteps();
+	auto count = undoStepCount();
 	auto first = begin(undo_steps);
-	auto last  = first + StepList::difference_type(undoStepCount());
-	first = std::find_if(first, last, [](auto&& undo_step) { return undo_step->isValid(); });
-	saveSteps(xml, first, last);
+	auto last  = first + count;
+	
+	// limit number of saved steps
+	first += qMax(0, count - int(max_undo_steps));
+	// limit to valid steps
+	auto first_valid = last;
+	for (auto prev = first_valid; first_valid != first; first_valid = prev)
+	{
+		--prev;
+		if (!(*prev)->isValid())
+			break;
+	}
+	
+	XmlElementWriter undo_element(xml, QLatin1String("undo"));
+	std::for_each(first_valid, last, [&xml](auto& step) { step->save(xml); });
 }
 
-void UndoManager::saveRedo(QXmlStreamWriter& xml)
+void UndoManager::saveRedo(QXmlStreamWriter& xml) const
 {
-	XmlElementWriter redo_element(xml, QLatin1String("redo"));
-	
-	validateRedoSteps();
+	auto count = redoStepCount();
 	auto first = undo_steps.rbegin();
-	auto last  = undo_steps.rbegin() + StepList::difference_type(redoStepCount());
-	saveSteps(xml, first, last);
+	auto last  = first + count;
+	
+	// limit number of saved steps
+	first += qMax(0, count - int(max_undo_steps));
+	// limit to valid steps
+	auto first_valid = last;
+	for (auto prev = first_valid; first_valid != first; first_valid = prev)
+	{
+		--prev;
+		if (!(*prev)->isValid())
+			break;
+	}
+	
+	XmlElementWriter redo_element(xml, QLatin1String("redo"));
+	std::for_each(first_valid, last, [&xml](auto& step) { step->save(xml); });
 }
 
 
