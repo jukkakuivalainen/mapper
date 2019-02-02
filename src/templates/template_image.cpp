@@ -1,6 +1,6 @@
 /*
  *    Copyright 2012, 2013 Thomas Schöps
- *    Copyright 2012-2017 Kai Pastor
+ *    Copyright 2012-2018 Kai Pastor
  *
  *    This file is part of OpenOrienteering.
  *
@@ -29,6 +29,7 @@
 #include <QAbstractButton>
 #include <QByteArray>
 #include <QDebug>
+#include <QFileInfo>  // IWYU pragma: keep
 #include <QFlags>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -39,6 +40,7 @@
 #include <QLineEdit>
 #include <QList>
 #include <QMessageBox>
+#include <QPaintEngine>
 #include <QPainter>
 #include <QPen>
 #include <QPoint>
@@ -56,9 +58,13 @@
 #include "core/latlon.h"
 #include "core/map.h"
 #include "core/map_coord.h"
+#include "core/storage_location.h"  // IWYU pragma: keep
 #include "gui/georeferencing_dialog.h"
 #include "gui/select_crs_dialog.h"
 #include "gui/util_gui.h"
+#ifdef QT_PRINTSUPPORT_LIB
+#include "printsupport/advanced_pdf_printer.h"
+#endif
 #include "templates/world_file.h"
 #include "util/transformation.h"
 #include "util/util.h"
@@ -99,7 +105,12 @@ TemplateImage::~TemplateImage()
 
 bool TemplateImage::saveTemplateFile() const
 {
-	return image.save(template_path);
+	const auto result = image.save(template_path);
+#ifdef Q_OS_ANDROID
+	// Make the MediaScanner aware of the *updated* file.
+	Android::mediaScannerScanFile(QFileInfo(template_path).absolutePath());
+#endif
+	return result;
 }
 
 
@@ -282,6 +293,22 @@ void TemplateImage::drawTemplate(QPainter* painter, const QRectF& clip_rect, dou
 	
 	painter->setRenderHint(QPainter::SmoothPixmapTransform);
 	painter->setOpacity(opacity);
+#ifdef QT_PRINTSUPPORT_LIB
+	// QTBUG-70752: QPdfEngine fails to properly apply constant opacity on
+	// images. This can be worked around by setting a real brush.
+	// Fixed in Qt 5.12.0.
+	/// \todo Fix image opacity in AdvancedPdfEngine
+#if QT_VERSION < 0x051200
+	if (painter->paintEngine()->type() == QPaintEngine::Pdf
+	    || painter->paintEngine()->type() == AdvancedPdfPrinter::paintEngineType())
+#else
+	if (painter->paintEngine()->type() == AdvancedPdfPrinter::paintEngineType())
+#endif
+	{
+		if (opacity < 1)
+			painter->setBrush(Qt::white);
+	}
+#endif
 	painter->drawImage(QPointF(-image.width() * 0.5, -image.height() * 0.5), image);
 	painter->setRenderHint(QPainter::SmoothPixmapTransform, false);
 }
