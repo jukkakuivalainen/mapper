@@ -33,6 +33,7 @@
 #include <QByteArray>
 #include <QDebug>
 #include <QIODevice>
+#include <QPaintEngine>
 #include <QPainter>
 #include <QPoint>
 #include <QPointF>
@@ -59,6 +60,7 @@
 #include "fileformats/xml_file_format_p.h"
 #include "gui/map/map_widget.h"
 #include "templates/template.h"
+#include "undo/map_part_undo.h"
 #include "undo/object_undo.h"
 #include "undo/undo.h"
 #include "undo/undo_manager.h"
@@ -718,6 +720,7 @@ QHash<const Symbol*, Symbol*> Map::importMap(
 			// Import parts like this:
 			//  - if the other map has only one part, import it into the current part
 			//  - else check if there is already a part with an equal name for every part to import and import into this part if found, else create a new part
+			auto* undo_step = new CombinedUndoStep(this);
 			for (const auto* part_to_import : imported_map.parts)
 			{
 				MapPart* dest_part = nullptr;
@@ -740,6 +743,7 @@ QHash<const Symbol*, Symbol*> Map::importMap(
 						// Import as new part
 						dest_part = new MapPart(part_to_import->getName(), this);
 						addPart(dest_part, 0);
+						undo_step->push(new MapPartUndoStep(this, MapPartUndoStep::RemoveMapPart, 0));
 					}
 				}
 				
@@ -748,12 +752,16 @@ QHash<const Symbol*, Symbol*> Map::importMap(
 				current_part_index = std::size_t(findPartIndex(dest_part));
 				
 				bool select_and_center_objects = dest_part == temp_current_part;
-				dest_part->importPart(part_to_import, symbol_map, transform, select_and_center_objects);
-				if (select_and_center_objects)
-					ensureVisibilityOfSelectedObjects(Map::FullVisibility);
+				if (auto import_undo = dest_part->importPart(part_to_import, symbol_map, transform, select_and_center_objects))
+				{
+					undo_step->push(import_undo.release());
+					if (select_and_center_objects)
+						ensureVisibilityOfSelectedObjects(Map::FullVisibility);
+				}
 				
 				current_part_index = std::size_t(findPartIndex(temp_current_part));
 			}
+			push(undo_step);
 		}
 	}
 	
@@ -810,9 +818,9 @@ void Map::drawColorSeparation(QPainter* painter, const RenderConfig& config, con
 	renderables->drawColorSeparation(painter, config, spot_color, use_color);
 }
 
-void Map::drawGrid(QPainter* painter, const QRectF& bounding_box, bool on_screen)
+void Map::drawGrid(QPainter* painter, const QRectF& bounding_box)
 {
-	grid.draw(painter, bounding_box, this, on_screen);
+	grid.draw(painter, bounding_box, this);
 }
 
 void Map::drawTemplates(QPainter* painter, const QRectF& bounding_box, int first_template, int last_template, const MapView* view, bool on_screen) const
@@ -820,20 +828,22 @@ void Map::drawTemplates(QPainter* painter, const QRectF& bounding_box, int first
 	for (int i = first_template; i <= last_template; ++i)
 	{
 		const Template* temp = getTemplate(i);
-		bool visible  = temp->getTemplateState() == Template::Loaded;
+		if (temp->getTemplateState() != Template::Loaded)
+			continue;
+		
 		double scale  = std::max(temp->getTemplateScaleX(), temp->getTemplateScaleY());
-		float opacity = 1.0f;
+		auto visibility = TemplateVisibility{ 1, true };
 		if (view)
 		{
-			auto visibility = view->getTemplateVisibility(temp);
-			visible &= visibility.visible;
-			opacity  = visibility.opacity;
-			scale   *= view->getZoom();
+			visibility = view->getTemplateVisibility(temp);
+			visibility.visible &= visibility.opacity > 0;
+			scale *= view->getZoom();
 		}
-		if (visible)
+		if (visibility.visible)
 		{
+			Q_ASSERT(visibility.opacity == 1 || painter->paintEngine()->hasFeature(QPaintEngine::ConstantOpacity));
 			painter->save();
-			temp->drawTemplate(painter, bounding_box, scale, on_screen, opacity);
+			temp->drawTemplate(painter, bounding_box, scale, on_screen, visibility.opacity);
 			painter->restore();
 		}
 	}
@@ -1328,7 +1338,7 @@ void Map::determineColorsInUse(const std::vector< bool >& by_which_symbols, std:
 		if (out[c])
 			continue;
 		
-		const auto color = getColor(int(c));
+		const auto* color = getColor(int(c));
 		if (color->getSpotColorMethod() != MapColor::SpotColor)
 			continue;
 		
@@ -1337,7 +1347,7 @@ void Map::determineColorsInUse(const std::vector< bool >& by_which_symbols, std:
 			if (!out[o])
 				continue;
 			
-			const auto other = getColor(int(o));
+			const auto* other = getColor(int(o));
 			if (other->getSpotColorMethod() != MapColor::CustomColor)
 				continue;
 			
@@ -1371,6 +1381,19 @@ bool Map::hasSpotColors() const
 			return true;
 	}
 	return false;
+}
+
+bool Map::hasAlpha() const
+{
+	return std::any_of(begin(color_set->colors), end(color_set->colors), [this](const MapColor* color) {
+		const auto opacity = color->getOpacity();
+		return opacity > 0 && opacity < 1
+		       && std::any_of(begin(symbols), end(symbols), [this, color](const Symbol* symbol) {
+			return !symbol->isHidden()
+			       && symbol->containsColor(color)
+			       && this->existsObjectWithSymbol(symbol);
+		});
+	});
 }
 
 
@@ -1422,14 +1445,14 @@ QHash<const Symbol*, Symbol*> Map::importSymbols(
 	// Add the created symbols
 	if (insert_pos < 0)
 		insert_pos = getNumSymbols();
-	for (const auto symbol : created_symbols)
+	for (auto* symbol : created_symbols)
 	{
 		addSymbol(symbol, insert_pos);
 		++insert_pos;
 	}
 	
 	// Notify the created symbols of the new context (mind combined symbols)
-	for (const auto symbol : created_symbols)
+	for (auto* symbol : created_symbols)
 	{
 		for (auto it = out_pointermap.constBegin(); it != out_pointermap.constEnd(); ++it)
 		{
@@ -1728,7 +1751,7 @@ void Map::updateSymbolIconZoom()
 	// the mean of the line symbol widths.
 	auto values = std::vector<qreal>();
 	values.reserve(symbols.size());
-	for (const auto symbol : symbols)
+	for (const auto* symbol : symbols)
 	{
 		if (symbol->isHelperSymbol())
 			continue;
@@ -1756,7 +1779,7 @@ void Map::updateSymbolIconZoom()
 	if (!qFuzzyCompare(new_scale, symbol_icon_scale))
 	{
 		symbol_icon_scale = new_scale;
-		for (const auto symbol : symbols)
+		for (auto* symbol : symbols)
 			symbol->resetIcon();
 		emit symbolIconZoomChanged();
 	}
@@ -1980,96 +2003,45 @@ void Map::setCurrentPartIndex(std::size_t index)
 	}
 }
 
-std::size_t Map::reassignObjectsToMapPart(std::set<Object*>::const_iterator begin, std::set<Object*>::const_iterator end, std::size_t source, std::size_t destination)
+int Map::reassignObjectsToMapPart(std::vector<int>::const_iterator first, std::vector<int>::const_iterator last, std::size_t source, std::size_t destination)
 {
 	Q_ASSERT(source < parts.size());
 	Q_ASSERT(destination < parts.size());
 	
-	std::size_t count = 0;
 	MapPart* const source_part = parts[source];
 	MapPart* const target_part = parts[destination];
-	for (auto it = begin; it != end; ++it)
+	auto first_object = target_part->getNumObjects();
+	auto selection_size = getNumSelectedObjects();
+	for (auto it = first; it != last; ++it)
 	{
-		Object* const object = *it;
-		source_part->deleteObject(object, true);
-
-		int index = target_part->getNumObjects();
-		target_part->addObject(object, index);
-		
-		++count;
-	}
-	
-	setOtherDirty();
-	
-	std::size_t const target_end   = target_part->getNumObjects();
-	std::size_t const target_begin = target_end - count;
-	
-	if (current_part_index == source)
-	{
-		int const selection_size = getNumSelectedObjects();
-		
-		// When modifying the selection we must not use the original iterators
-		// because they may be operating on the selection and then become invalid!
-		for (std::size_t i = target_begin; i != target_end; ++i)
-		{
-			Object* const object = target_part->getObject(i);
-			if (isObjectSelected(object))
-				removeObjectFromSelection(object, false);
-		}
-		
-		if (selection_size != getNumSelectedObjects())
-			emit objectSelectionChanged();
-	}	
-		
-	return target_begin;
-}
-
-std::size_t Map::reassignObjectsToMapPart(std::vector<int>::const_iterator begin, std::vector<int>::const_iterator end, std::size_t source, std::size_t destination)
-{
-	Q_ASSERT(source < parts.size());
-	Q_ASSERT(destination < parts.size());
-	
-	bool selection_changed = false;
-	
-	std::size_t count = 0;
-	MapPart* const source_part = parts[source];
-	MapPart* const target_part = parts[destination];
-	for (auto it = begin; it != end; ++it)
-	{
+		Q_ASSERT(*it < source_part->getNumObjects());
 		Object* const object = source_part->getObject(*it);
 		
 		if (current_part_index == source && isObjectSelected(object))
-		{
 			removeObjectFromSelection(object, false);
-			selection_changed = true;
-		}
 		
 		source_part->deleteObject(object, true);
-		
-		int index = target_part->getNumObjects();
-		target_part->addObject(object, index);
-		
-		++count;
+		target_part->addObject(object);
 	}
 	
 	setOtherDirty();
 	
-	if (selection_changed)
+	if (getNumSelectedObjects() != selection_size)
 		emit objectSelectionChanged();
 	
-	return target_part->getNumObjects() - count;
+	return first_object;
 }
 
-std::size_t Map::mergeParts(std::size_t source, std::size_t destination)
+int Map::mergeParts(std::size_t source, std::size_t destination)
 {
 	Q_ASSERT(source < parts.size());
 	Q_ASSERT(destination < parts.size());
 	
-	std::size_t count = 0;
+	int count = 0;
 	MapPart* const source_part = parts[source];
 	MapPart* const target_part = parts[destination];
 	// Preserve order (but not efficient)
-	for (std::size_t i = source_part->getNumObjects(); i > 0 ; --i)
+	for (auto i = source_part->getNumObjects(); i > 0 ; --i)
 	{
 		Object* object = source_part->getObject(0);
 		source_part->deleteObject(0, true);
@@ -2158,7 +2130,7 @@ void Map::setObjectAreaDirty(const QRectF& map_coords_rect)
 }
 
 void Map::findObjectsAt(
-        MapCoordF coord,
+        const MapCoordF& coord,
         float tolerance,
         bool treat_areas_as_paths,
         bool extended_selection,
@@ -2170,7 +2142,7 @@ void Map::findObjectsAt(
 }
 
 void Map::findAllObjectsAt(
-        MapCoordF coord,
+        const MapCoordF& coord,
         float tolerance,
         bool treat_areas_as_paths,
         bool extended_selection,
@@ -2183,8 +2155,8 @@ void Map::findAllObjectsAt(
 }
 
 void Map::findObjectsAtBox(
-        MapCoordF corner1,
-        MapCoordF corner2,
+        const MapCoordF& corner1,
+        const MapCoordF& corner2,
         bool include_hidden_objects,
         bool include_protected_objects,
         std::vector< Object* >& out ) const

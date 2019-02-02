@@ -53,12 +53,12 @@ SymbolDropDown::SymbolDropDown(const Map* map, int filter, const Symbol* initial
  : QComboBox(parent)
 {
 	num_custom_items = 0;
-	addItem(tr("- none -"), QVariant::fromValue<Symbol*>(nullptr));
+	addItem(tr("- none -"), QVariant::fromValue<const Symbol*>(nullptr));
 	
 	int size = map->getNumSymbols();
 	for (int i = 0; i < size; ++i)
 	{
-		const auto symbol = map->getSymbol(i);
+		const auto* symbol = map->getSymbol(i);
 		if (!(symbol->getType() & filter))
 			continue;
 		if (symbol == excluded_symbol)

@@ -212,7 +212,7 @@ namespace {
 	template<class T>
 	bool containsPathObject(const T& container)
 	{
-		return std::any_of(begin(container), end(container), [](const auto object) {
+		return std::any_of(begin(container), end(container), [](const auto* object) {
 			return object->getType() == Object::Path;
 		});
 	}
@@ -574,23 +574,22 @@ bool MapEditorController::exportTo(const QString& path, const FileFormat& format
 	auto exporter = format.makeExporter(path, map, main_view);
 	if (!exporter)
 	{
-		QMessageBox::warning(nullptr,
-		                     tr("Error"),
-		                     tr("Cannot export the map as\n"
-		                        "\"%1\"\n"
-		                        "because saving as %2 (.%3) is not supported.").
-		                     arg(path,
-		                         format.description(),
-		                         format.fileExtensions().join(QLatin1String(", ")) ) );
+		auto message =
+		        tr("Cannot export the map as\n"
+		           "\"%1\"\n"
+		           "because saving as %2 (.%3) is not supported.").
+		        arg(path,
+		            format.description(),
+		            format.fileExtensions().join(QLatin1String(", ")) );
+		QMessageBox::warning(nullptr, tr("Error"), message);
 		return false;
 	}
 	
 	if (!exporter->doExport())
 	{
-		QMessageBox::warning(nullptr,
-		                     tr("Error"),
-		                     tr("Cannot save file\n%1:\n%2")
-		                     .arg(path, exporter->warnings().back()) );
+		auto message = tr("Cannot save file\n%1:\n%2")
+		               .arg(path, exporter->warnings().back());
+		QMessageBox::warning(nullptr, tr("Error"), message);
 		return false;
 	}
 	
@@ -618,6 +617,14 @@ bool MapEditorController::loadFrom(const QString& path, const FileFormat& format
 	}
 	
 	auto importer = format.makeImporter(path, map, main_view);
+	if (!importer)
+	{
+		QMessageBox::warning(dialog_parent, tr("Error"),
+		                     MainWindow::tr("Cannot open file:\n%1\n\n%2")
+		                     .arg(path, MainWindow::tr("Invalid file type.")));
+		return false;
+	}
+	
 	if (!importer->doImport())
 	{
 		delete map;
@@ -625,14 +632,14 @@ bool MapEditorController::loadFrom(const QString& path, const FileFormat& format
 		main_view = nullptr;
 		
 		Q_ASSERT(!importer->warnings().empty());
-		QMessageBox::warning(window, tr("Error"), importer->warnings().back());
+		QMessageBox::warning(dialog_parent, tr("Error"), importer->warnings().back());
 		return false;
 	}
 	
 	setMapAndView(map, main_view);
 	map->setHasUnsavedChanges(false);
 	if (!importer->warnings().empty())
-		MainWindow::showMessageBox(window, tr("Warning"), tr("The map import generated warnings."), importer->warnings());
+		MainWindow::showMessageBox(dialog_parent, tr("Warning"), tr("The map import generated warnings."), importer->warnings());
 	return true;
 }
 
@@ -891,6 +898,11 @@ void MapEditorController::createActions()
 	print_act_mapper->setMapping(export_image_act, PrintWidget::EXPORT_IMAGE_TASK);
 	export_pdf_act = newAction("export-pdf", tr("&PDF"), print_act_mapper, SLOT(map()), nullptr, QString{}, "file_menu.html");
 	print_act_mapper->setMapping(export_pdf_act, PrintWidget::EXPORT_PDF_TASK);
+	if (auto vector_format = FileFormats.findFormat("OGR-export"))
+		export_vector_act = newAction("export-vector", vector_format->description(), this, SLOT(exportVector()), nullptr, {}, "edit_menu.html");
+	else
+		export_vector_act = nullptr;
+	
 #else
 	print_act = nullptr;
 	export_image_act = nullptr;
@@ -1073,6 +1085,8 @@ void MapEditorController::createMenuAndToolbars()
 	export_menu->menuAction()->setMenuRole(QAction::NoRole);
 	export_menu->addAction(export_image_act);
 	export_menu->addAction(export_pdf_act);
+	if (export_vector_act)
+		export_menu->addAction(export_vector_act);
 	file_menu->insertMenu(insertion_act, export_menu);
 #endif
 	file_menu->insertSeparator(insertion_act);
@@ -1123,6 +1137,7 @@ void MapEditorController::createMenuAndToolbars()
 	view_menu->addSeparator();
 	view_menu->addAction(fullscreen_act);
 	view_menu->addSeparator();
+	toolbars_menu = view_menu->addMenu(tr("Toolbars"));
 	view_menu->addAction(tags_window_act);
 	view_menu->addAction(color_window_act);
 	view_menu->addAction(symbol_window_act);
@@ -1310,6 +1325,13 @@ void MapEditorController::createMenuAndToolbars()
 	toolbar_advanced_editing->addAction(boolean_difference_act);
 	toolbar_advanced_editing->addAction(boolean_xor_act);
 	toolbar_advanced_editing->addAction(boolean_merge_holes_act);
+	
+	toolbars_menu->addAction(main_toolbar->toggleViewAction());
+	toolbars_menu->addAction(toolbar_view->toggleViewAction());
+	toolbars_menu->addAction(toolbar_mapparts->toggleViewAction());
+	toolbars_menu->addAction(toolbar_drawing->toggleViewAction());
+	toolbars_menu->addAction(toolbar_editing->toggleViewAction());
+	toolbars_menu->addAction(toolbar_advanced_editing->toggleViewAction());
 	
 	QWidget* context_menu = map_widget->getContextMenu();
 	context_menu->addAction(edit_tool_act);
@@ -1622,6 +1644,35 @@ bool MapEditorController::keyReleaseEventFilter(QKeyEvent* event)
 	return map_widget->keyReleaseEventFilter(event);
 }
 
+
+
+// slot
+void MapEditorController::exportVector()
+{
+	QSettings settings;
+	QString import_directory = settings.value(QString::fromLatin1("importFileDirectory"), QDir::homePath()).toString();
+	
+	auto format = FileFormats.findFormat("OGR-export");
+	if (!format)
+		return;  /// \todo Error message?
+	
+	QString filename = FileDialog::getSaveFileName(
+	                       window,
+	                       tr("Export"),
+	                       import_directory,
+	                       QString::fromLatin1("%1 (%2);;%3 (*.*)")
+	                       .arg(format->description(),
+	                            QLatin1String("*.") + format->fileExtensions().join(QString::fromLatin1(" *.")),
+	                            tr("All files")) );
+	if (filename.isEmpty() || filename.isNull())
+		return;
+	
+	settings.setValue(QString::fromLatin1("importFileDirectory"), QFileInfo(filename).canonicalPath());
+	
+	exportTo(filename, *format);
+}
+
+
 void MapEditorController::printClicked(int task)
 {
 #ifdef QT_PRINTSUPPORT_LIB
@@ -1697,7 +1748,7 @@ void MapEditorController::copy()
 	
 	std::vector<bool> symbol_filter;
 	symbol_filter.assign(map->getNumSymbols(), false);
-	for (const auto object : map->selectedObjects())
+	for (const auto* object : map->selectedObjects())
 	{
 		int symbol_index = map->findSymbolIndex(object->getSymbol());
 		if (symbol_index >= 0)
@@ -1711,7 +1762,7 @@ void MapEditorController::copy()
 	auto symbol_map = copy_map.importMap(*map, Map::MinimalSymbolImport, &symbol_filter, -1, true);
 	
 	// Duplicate all selected objects into copy map
-	for (const auto object : map->selectedObjects())
+	for (const auto* object : map->selectedObjects())
 	{
 		auto new_object = object->duplicate();
 		if (symbol_map.contains(new_object->getSymbol()))
@@ -1828,6 +1879,7 @@ void MapEditorController::moveToGpsPos()
 		return;
 	auto cur_gps_pos = gps_display->getLatestGPSCoord();
 	main_view->setCenter({ cur_gps_pos.x(), cur_gps_pos.y() });
+	gps_display->startBlinking(3);
 }
 
 void MapEditorController::zoomIn()
@@ -2183,7 +2235,11 @@ void MapEditorController::selectedSymbolsChanged()
 		}
 		else //if (symbol_widget->getNumSelectedSymbols() == 1)
 		{
-			auto image = symbol->createIcon(*map, qMin(icon_size.width(), icon_size.height()));
+			auto image = symbol->getCustomIcon();
+			if (image.isNull())
+				image = symbol->createIcon(*map, qMin(icon_size.width(), icon_size.height()));
+			else
+				image = image.scaled(icon_size.width(), icon_size.height(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
 			if (symbol->isHidden() || symbol->isProtected())
 			{
 				QPainter p(&image);
@@ -2245,9 +2301,9 @@ void MapEditorController::objectSelectionChanged()
 	{
 		bool uniform_symbol_selected = true;
 		const Symbol* uniform_symbol = nullptr;
-		for (const auto object : map->selectedObjects())
+		for (const auto* object : map->selectedObjects())
 		{
-			const auto symbol = object->getSymbol();
+			const auto* symbol = object->getSymbol();
 			if (!uniform_symbol)
 			{
 				uniform_symbol = symbol;
@@ -2306,9 +2362,9 @@ void MapEditorController::updateObjectDependentActions()
 	
 	if (!editing_in_progress)
 	{
-		for (const auto object : map->selectedObjects())
+		for (const auto* object : map->selectedObjects())
 		{
-			const auto symbol = object->getSymbol();
+			const auto* symbol = object->getSymbol();
 			int symbol_index = map->findSymbolIndex(symbol);
 			if (symbol_index >= 0 && symbol_index < (int)symbols_in_selection.size())
 				symbols_in_selection[symbol_index] = true;
@@ -2552,7 +2608,7 @@ void MapEditorController::duplicateClicked()
 	std::vector<Object*> new_objects;
 	new_objects.reserve(map->getNumSelectedObjects());
 	
-	for (const auto object : map->selectedObjects())
+	for (const auto* object : map->selectedObjects())
 	{
 		Object* duplicate = object->duplicate();
 		map->addObject(duplicate);
@@ -2563,7 +2619,7 @@ void MapEditorController::duplicateClicked()
 	MapPart* part = map->getCurrentPart();
 	
 	map->clearObjectSelection(false);
-	for (const auto object : new_objects)
+	for (auto* object : new_objects)
 	{
 		undo_step->addObject(part->findObjectIndex(object));
 		map->addObjectToSelection(object, object == new_objects.back());
@@ -2607,7 +2663,7 @@ void MapEditorController::switchSymbolClicked()
 		switch_step = new SwitchSymbolUndoStep(map);
 	}
 	
-	for (const auto object : map->selectedObjects())
+	for (auto* object : map->selectedObjects())
 	{
 		if (close_paths)
 		{
@@ -2713,11 +2769,11 @@ void MapEditorController::fillBorderClicked()
 	auto undo_step = new DeleteObjectsUndoStep(map);
 	MapPart* part = map->getCurrentPart();
 	
-	for (const auto object : map->selectedObjects())
+	for (const auto* object : map->selectedObjects())
 	{
 		if (split_up && object->getType() == Object::Path)
 		{
-			PathObject* path_object = object->asPath();
+			const auto* path_object = object->asPath();
 			for (const auto& part : path_object->parts())
 			{
 				auto new_object = new PathObject { part };
@@ -2859,7 +2915,7 @@ void MapEditorController::switchDashesClicked()
 	auto undo_step = new SwitchDashesUndoStep(map);
 	MapPart* part = map->getCurrentPart();
 	
-	for (const auto object : map->selectedObjects())
+	for (auto* object : map->selectedObjects())
 	{
 		if (object->getSymbol()->getContainedTypes() & Symbol::Line)
 		{
@@ -2877,19 +2933,19 @@ void MapEditorController::switchDashesClicked()
 }
 
 /// \todo Review use of container API
-float connectPaths_FindClosestEnd(const std::vector<Object*>& objects, PathObject* a, int a_index, PathPartVector::size_type path_part_a, bool path_part_a_begin, PathObject** out_b, int* out_b_index, int* out_path_part_b, bool* out_path_part_b_begin)
+float connectPaths_FindClosestEnd(const std::vector<Object*>& objects, const PathObject* a, int a_index, PathPartVector::size_type path_part_a, bool path_part_a_begin, PathObject** out_b, int* out_b_index, int* out_path_part_b, bool* out_path_part_b_begin)
 {
 	float best_dist_sq = std::numeric_limits<float>::max();
 	for (int i = a_index; i < (int)objects.size(); ++i)
 	{
-		PathObject* b = reinterpret_cast<PathObject*>(objects[i]);
+		const auto* b = static_cast<const PathObject*>(objects[i]);
 		if (b->getSymbol() != a->getSymbol())
 			continue;
 		
 		auto num_parts = b->parts().size();
 		for (PathPartVector::size_type path_part_b = (a == b) ? path_part_a : 0; path_part_b < num_parts; ++path_part_b)
 		{
-			PathPart& part = b->parts()[path_part_b];
+			const PathPart& part = b->parts()[path_part_b];
 			if (!part.isClosed())
 			{
 				for (int begin = 0; begin < 2; ++begin)
@@ -2898,13 +2954,13 @@ float connectPaths_FindClosestEnd(const std::vector<Object*>& objects, PathObjec
 					if (a == b && path_part_a == path_part_b && path_part_a_begin == path_part_b_begin)
 						continue;
 					
-					MapCoord& coord_a = a->getCoordinate(path_part_a_begin ? a->parts()[path_part_a].first_index : (a->parts()[path_part_a].last_index));
-					MapCoord& coord_b = b->getCoordinate(path_part_b_begin ? b->parts()[path_part_b].first_index : (b->parts()[path_part_b].last_index));
+					const MapCoord coord_a = a->getCoordinate(path_part_a_begin ? a->parts()[path_part_a].first_index : (a->parts()[path_part_a].last_index));
+					const MapCoord coord_b = b->getCoordinate(path_part_b_begin ? b->parts()[path_part_b].first_index : (b->parts()[path_part_b].last_index));
 					float distance_sq = coord_a.distanceSquaredTo(coord_b);
 					if (distance_sq < best_dist_sq)
 					{
 						best_dist_sq = distance_sq;
-						*out_b = b;
+						*out_b = const_cast<PathObject*>(b);  // = /* non-const */ object[i]
 						*out_b_index = i;
 						*out_path_part_b = path_part_b;
 						*out_path_part_b_begin = path_part_b_begin;
@@ -2927,7 +2983,7 @@ void MapEditorController::connectPathsClicked()
 	// Collect all objects in question
 	objects.reserve(map->getNumSelectedObjects());
 	undo_objects.reserve(map->getNumSelectedObjects());
-	for (const auto object : map->selectedObjects())
+	for (auto* object : map->selectedObjects())
 	{
 		if (object->getSymbol()->getContainedTypes() & Symbol::Line && object->getType() == Object::Path)
 		{
@@ -3036,7 +3092,7 @@ void MapEditorController::connectPathsClicked()
 		if (best_object_a != best_object_b)
 		{
 			// Copy all remaining parts of object b over to a
-			best_object_a->getCoordinate(best_object_a->getCoordinateCount() - 1).setHolePoint(true);
+			best_object_a->getCoordinateRef(best_object_a->getCoordinateCount() - 1).setHolePoint(true);
 			for (auto i = PathPartVector::size_type { 0 }; i < best_object_b->parts().size(); ++i)
 			{
 				if (i != best_part_b)
@@ -3189,7 +3245,7 @@ void MapEditorController::convertToCurvesClicked()
 	auto undo_step = new ReplaceObjectsUndoStep(map);
 	MapPart* part = map->getCurrentPart();
 	
-	for (const auto object : map->selectedObjects())
+	for (auto* object : map->selectedObjects())
 	{
 		if (object->getType() != Object::Path)
 			continue;
@@ -3224,7 +3280,7 @@ void MapEditorController::simplifyPathClicked()
 	auto undo_step = new ReplaceObjectsUndoStep(map);
 	MapPart* part = map->getCurrentPart();
 	
-	for (const auto object : map->selectedObjects())
+	for (auto* object : map->selectedObjects())
 	{
 		if (object->getType() != Object::Path)
 			continue;
@@ -3267,7 +3323,7 @@ void MapEditorController::distributePointsClicked()
 	
 	// Create points along paths
 	std::vector<PointObject*> created_objects;
-	for (const auto object : map->selectedObjects())
+	for (const auto* object : map->selectedObjects())
 	{
 		if (object->getType() == Object::Path)
 			DistributePointsTool::execute(object->asPath(), point, settings, created_objects);
@@ -3361,34 +3417,42 @@ void MapEditorController::enableGPSDisplay(bool enable)
 					// There is a template for this track.
 					new_template = false;
 					track = qobject_cast<TemplateTrack*>(temp);
-					if (!track)
-					{
-						// Need to replace the template at template_index
-						map->setTemplateAreaDirty(template_index);
-						map->deleteTemplate(template_index);
-					}
 					break;
 				}
 			}
 			
+			// Derive new visibility from previous/default one.
+			auto visibility = main_view->getTemplateVisibility(track);
+			visibility.opacity = std::max(0.5f, visibility.opacity);
+			visibility.visible = true;
+			
 			if (!track)
 			{
+				if (!new_template)
+				{
+					// Need to replace the template at template_index
+					map->setTemplateAreaDirty(template_index);
+					map->deleteTemplate(template_index);
+				}
 				track = new TemplateTrack(gpx_file_path, map);
+				// This will set the state to 'Loaded', so we need to reset it
+				// to `Unloaded` to allow for loading the file when it becomes
+				// visible for the first time.
+				track->configureForGPSTrack();
+				if (QFileInfo::exists(gpx_file_path))
+				{
+					track->unloadTemplateFile();
+					track->loadTemplateFile(false);
+				}
 				map->addTemplate(track, template_index);
-			}
-			if (track->getTemplateState() != Template::Loaded)
-			{
-				track->loadTemplateFile(false);
-			}
-			track->configureForGPSTrack();
-			map->setTemplateAreaDirty(template_index);
-			if (new_template)
-			{
 				// When the map is saved, the new track must be saved even if it is empty.
 				track->setHasUnsavedChanges(true);
 				map->setTemplatesDirty();
 			}
-				
+			
+			main_view->setTemplateVisibility(track, visibility);
+			map->setTemplateAreaDirty(template_index);
+			
 			gps_track_recorder = new GPSTrackRecorder(gps_display, track, gps_track_draw_update_interval, map_widget);
 		}
 	}
@@ -3708,10 +3772,16 @@ void MapEditorController::changeMapPart(int index)
 void MapEditorController::reassignObjectsToMapPart(int target)
 {
 	auto current = map->getCurrentPartIndex();
-	auto begin   = map->reassignObjectsToMapPart(map->selectedObjectsBegin(), map->selectedObjectsEnd(), current, target);
+	auto* current_part = map->getPart(current);
+	std::vector<int> objects(map->selectedObjects().size());
+	std::transform(map->selectedObjectsBegin(), map->selectedObjectsEnd(), begin(objects), [current_part](auto* object) {
+		return current_part->findObjectIndex(object);
+	});
+	std::sort(objects.rbegin(), objects.rend());
+	map->reassignObjectsToMapPart(begin(objects), end(objects), current, target);
 	
 	auto undo = new SwitchPartUndoStep(map, target, current);
-	for (std::size_t i = begin, end = map->getPart(target)->getNumObjects(); i < end; ++i)
+	for (auto i : objects)
 		undo->addObject(i);
 	map->push(undo);
 }
@@ -3736,11 +3806,11 @@ void MapEditorController::mergeCurrentMapPartTo(int target)
 		auto source = map->getCurrentPartIndex();
 		UndoStep* add_part_step = new MapPartUndoStep(map, MapPartUndoStep::AddMapPart, source);
 		
-		auto begin  = map->mergeParts(source, target);
+		auto first  = map->mergeParts(source, target);
 		
 		auto switch_part_undo = new SwitchPartUndoStep(map, target, source);
-		for (std::size_t i = begin, end = target_part->getNumObjects(); i < end; ++i)
-			switch_part_undo->addObject(i);
+		for (auto i = target_part->getNumObjects(); i > first; --i)
+			switch_part_undo->addObject(0);
 		
 		auto undo = new CombinedUndoStep(map);
 		undo->push(switch_part_undo);
@@ -3771,10 +3841,10 @@ void MapEditorController::mergeAllMapParts()
 		for (auto i = map->getNumParts() - 1; i > 0; --i)
 		{
 			UndoStep* add_part_step = new MapPartUndoStep(map, MapPartUndoStep::AddMapPart, i);
-			auto begin = map->mergeParts(i, 0);
+			auto first = map->mergeParts(i, 0);
 			auto switch_part_undo = new SwitchPartUndoStep(map, 0, i);
-			for (std::size_t j = begin, end = target_part->getNumObjects(); j < end; ++j)
-				switch_part_undo->addObject(j);
+			for (auto j = target_part->getNumObjects(); j > first; --j)
+				switch_part_undo->addObject(0);
 			undo->push(switch_part_undo);
 			undo->push(add_part_step);
 		}
@@ -3920,7 +3990,7 @@ void MapEditorController::importClicked()
 	QStringList map_extensions;
 	for (auto format : FileFormats.formats())
 	{
-		if (!format->supportsImport())
+		if (!format->supportsReading())
 			continue;
 		
 		map_names.push_back(format->primaryExtension().toUpper());
@@ -3942,7 +4012,7 @@ void MapEditorController::importClicked()
 	settings.setValue(QString::fromLatin1("importFileDirectory"), QFileInfo(filename).canonicalPath());
 	
 	bool success = false;
-	auto map_format = FileFormats.findFormatForFilename(filename, &FileFormat::supportsImport);
+	auto map_format = FileFormats.findFormatForFilename(filename, &FileFormat::supportsFileImport);
 	if (map_format)
 	{
 		// Map format recognized by filename extension

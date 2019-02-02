@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <memory>
 #include <vector>
 #include <utility>
 
@@ -44,6 +45,7 @@ class MapCoordF;
 class Object;
 class Symbol;
 using SymbolDictionary = QHash<QString, Symbol*>; // from symbol.h
+class UndoStep;
 
 
 using SelectionInfoVector = std::vector<std::pair<int, Object*>> ;
@@ -175,21 +177,21 @@ public:
 	 * Uses symbol_map to replace all symbols contained there.
 	 * No replacement is done for symbols which are not in the symbol_map.
 	 */
-	void importPart(const MapPart* other, const QHash<const Symbol*, Symbol*>& symbol_map,
+	std::unique_ptr<UndoStep> importPart(const MapPart* other, const QHash<const Symbol*, Symbol*>& symbol_map,
 		const QTransform& transform, bool select_new_objects);
 	
 	
 	/**
 	 * @see Map::findObjectsAt().
 	 */
-	void findObjectsAt(MapCoordF coord, float tolerance, bool treat_areas_as_paths,
+	void findObjectsAt(const MapCoordF& coord, float tolerance, bool treat_areas_as_paths,
 		bool extended_selection, bool include_hidden_objects,
 		bool include_protected_objects, SelectionInfoVector& out) const;
 	
 	/**
 	 * @see Map::findObjectsAtBox().
 	 */
-	void findObjectsAtBox(MapCoordF corner1, MapCoordF corner2,
+	void findObjectsAtBox(const MapCoordF& corner1, const MapCoordF& corner2,
 		bool include_hidden_objects, bool include_protected_objects,
 		std::vector<Object*>& out) const;
 	

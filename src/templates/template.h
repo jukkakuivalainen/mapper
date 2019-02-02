@@ -308,7 +308,6 @@ public:
 	 */
 	void unloadTemplateFile();
 	
-	
 	/** 
 	 * Draws the template using the given painter with the given opacity.
 	 * 
@@ -411,12 +410,12 @@ public:
 	
 	// Coordinate transformations between template coordinates and map coordinates
 	
-	inline MapCoordF mapToTemplate(MapCoordF coords) const
+	inline MapCoordF mapToTemplate(const MapCoordF& coords) const
 	{
 		return MapCoordF(map_to_template.get(0, 0) * coords.x() + map_to_template.get(0, 1) * coords.y() + map_to_template.get(0, 2),
 		                 map_to_template.get(1, 0) * coords.x() + map_to_template.get(1, 1) * coords.y() + map_to_template.get(1, 2));
 	}
-	inline MapCoordF mapToTemplateOther(MapCoordF coords) const	// normally not needed - this uses the other transformation parameters
+	inline MapCoordF mapToTemplateOther(const MapCoordF& coords) const	// normally not needed - this uses the other transformation parameters
 	{
 		Q_ASSERT(!is_georeferenced);
 		// SLOW - cache this matrix if needed often
@@ -425,12 +424,12 @@ public:
 		return MapCoordF(map_to_template_other.get(0, 0) * coords.x() + map_to_template_other.get(0, 1) * coords.y() + map_to_template_other.get(0, 2),
 		                 map_to_template_other.get(1, 0) * coords.x() + map_to_template_other.get(1, 1) * coords.y() + map_to_template_other.get(1, 2));
 	}
-	inline MapCoordF templateToMap(QPointF coords) const
+	inline MapCoordF templateToMap(const QPointF& coords) const
 	{
 		return MapCoordF(template_to_map.get(0, 0) * coords.x() + template_to_map.get(0, 1) * coords.y() + template_to_map.get(0, 2),
 		                 template_to_map.get(1, 0) * coords.x() + template_to_map.get(1, 1) * coords.y() + template_to_map.get(1, 2));
 	}
-	inline MapCoordF templateToMapOther(QPointF coords) const	// normally not needed - this uses the other transformation parameters
+	inline MapCoordF templateToMapOther(const QPointF& coords) const	// normally not needed - this uses the other transformation parameters
 	{
 		Q_ASSERT(!is_georeferenced);
 		return MapCoordF(template_to_map_other.get(0, 0) * coords.x() + template_to_map_other.get(0, 1) * coords.y() + template_to_map_other.get(0, 2),
@@ -480,15 +479,35 @@ public:
 	void setHasUnsavedChanges(bool value);
 	
 	inline bool isTemplateGeoreferenced() const {return is_georeferenced;}
-	inline void setTemplateGeoreferenced(bool value) {is_georeferenced = value;}
+	
+	/**
+	 * Returns if the template allows the georefencing state to be changed at all.
+	 * 
+	 * The default implementation returns false.
+	 */
+	virtual bool canChangeTemplateGeoreferenced();
+	
+	/**
+	 * Tries to change the usage of georeferencing data.
+	 * 
+	 * If supported by the actual template, this function tries to switch the
+	 * state between non-georeferenced and georeferenced. It returns the final
+	 * state which may be the same as before if the change is not implemented
+	 * or fails for other reasons.
+	 * 
+	 * The default implementation changes nothing, and it just returns the
+	 * current state.
+	 */
+	virtual bool trySetTemplateGeoreferenced(bool value, QWidget* dialog_parent);
+	
 	
 	// Transformation of non-georeferenced templates
 	
 	MapCoord templatePosition() const;
-	void setTemplatePosition(MapCoord coord);
+	void setTemplatePosition(const MapCoord& coord);
 	
 	MapCoord templatePositionOffset() const;
-	void setTemplatePositionOffset(MapCoord offset);
+	void setTemplatePositionOffset(const MapCoord& offset);
 	void applyTemplatePositionOffset();
 	void resetTemplatePositionOffset();
 	
@@ -509,6 +528,15 @@ public:
 	inline bool isAdjustmentApplied() const {return adjusted;}
 	inline bool isAdjustmentDirty() const {return adjustment_dirty;}
 	void setAdjustmentDirty(bool value);
+	
+	
+	/**
+	 * Returns true if the template has elements which are not opaque.
+	 * 
+	 * The default implementation returns true when the template is loaded.
+	 */
+	virtual bool hasAlpha() const;
+	
 	
 	// Static
 	/**

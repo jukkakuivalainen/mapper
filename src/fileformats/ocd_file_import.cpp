@@ -27,6 +27,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 
@@ -39,6 +40,7 @@
 #include <QFlags>
 #include <QFontMetricsF>
 #include <QIODevice>
+#include <QImage>
 #include <QImageReader>
 #include <QLatin1Char>
 #include <QLatin1String>
@@ -65,6 +67,7 @@
 #include "fileformats/file_format.h"
 #include "fileformats/ocd_file_format.h"
 #include "fileformats/ocd_georef_fields.h"
+#include "fileformats/ocd_icon.h"
 #include "fileformats/ocd_types_v8.h"
 #include "fileformats/ocd_types_v9.h"
 #include "fileformats/ocd_types_v10.h"
@@ -440,6 +443,11 @@ void OcdFileImport::importColors(const OcdFile<Ocd::FormatV8>& file)
 {
 	const Ocd::SymbolHeaderV8 & symbol_header = file.header()->symbol_header;
 	
+	if (symbol_header.cmyk_screen != Ocd::CmykScreenV8{})
+	{
+		qDebug("Ignoring unusual CMYK configuration");
+	}
+	
 	auto num_separations = qMin(quint16(24), symbol_header.num_separations);
 	if (num_separations > 0)
 	{
@@ -458,7 +466,8 @@ void OcdFileImport::importColors(const OcdFile<Ocd::FormatV8>& file)
 			  0.005f * separation_info.cmyk.black );
 			color->setCmyk(cmyk);
 			color->setOpacity(1.0f);
-			/// \todo raster frequency and angle
+			color->setScreenAngle(0.1 * separation_info.raster_angle);
+			color->setScreenFrequency(0.1 * separation_info.raster_freq);
 			spot_colors.push_back(color);
 		}
 	}
@@ -558,6 +567,8 @@ void OcdFileImport::importSpotColor(const QString& param_string)
 	int number = -1;
 	bool number_ok = false;
 	MapColorCmyk cmyk { 0.0, 0.0, 0.0, 0.0 };
+	double screen_angle = 45;
+	double screen_frequency = 150;
 	
 	SpotColorComponents components;
 	
@@ -601,8 +612,14 @@ void OcdFileImport::importSpotColor(const QString& param_string)
 				cmyk.k = 0.01f * f_value;
 			break;
 		case 'f':
+			f_value = param_value.toFloat(&ok);
+			if (ok && f_value >= 0)
+				screen_frequency = 0.1 * double(f_value);
+			break;
 		case 'a':
-			/// \todo Spot color frequency and angle
+			f_value = param_value.toFloat(&ok);
+			if (ok && f_value >= 0)
+				screen_angle = double(f_value);
 			break;
 		default:
 			; // nothing
@@ -616,6 +633,8 @@ void OcdFileImport::importSpotColor(const QString& param_string)
 	auto color = new MapColor(name, number);
 	color->setSpotColorName(name);
 	color->setCmyk(cmyk);
+	color->setScreenAngle(screen_angle);
+	color->setScreenFrequency(screen_frequency);
 	spot_colors.push_back(color);
 }
 
@@ -800,6 +819,13 @@ void OcdFileImport::importSymbols(const OcdFile< F >& file)
 		symbol_index[ocd_symbol.number] = symbol;
 	}
 	resolveSubsymbols();
+	
+	for (auto ocd_symbol_entry : file.symbols())
+	{
+		auto& ocd_symbol = *ocd_symbol_entry.entity;
+		if (symbol_index.contains(ocd_symbol.number))
+			dropRedundantIcon(symbol_index[ocd_symbol.number], ocd_symbol);
+	}
 }
 
 void OcdFileImport::resolveSubsymbols()
@@ -1076,6 +1102,71 @@ void OcdFileImport::setupBaseSymbol(Symbol* symbol, const OcdBaseSymbol& ocd_bas
 	symbol->setIsHelperSymbol(false);
 	symbol->setProtected(ocd_base_symbol.status & Ocd::SymbolProtected);
 	symbol->setHidden(ocd_base_symbol.status & Ocd::SymbolHidden);
+	setupIcon(symbol, ocd_base_symbol);
+}
+
+
+template< >
+void OcdFileImport::setupIcon<Ocd::BaseSymbolV8>(Symbol* symbol, const Ocd::BaseSymbolV8& ocd_base_symbol)
+try
+{
+	if (ocd_base_symbol.flags & Ocd::SymbolIconCompressedV8)
+		symbol->setCustomIcon(OcdIcon::toQImage(ocd_base_symbol.icon.uncompress()));
+	else
+		symbol->setCustomIcon(OcdIcon::toQImage(ocd_base_symbol.icon));
+}
+catch (std::logic_error& e)
+{
+	addWarning(tr(e.what()));
+}
+
+template< class OcdBaseSymbol >
+void OcdFileImport::setupIcon(Symbol* symbol, const OcdBaseSymbol& ocd_base_symbol)
+{
+	symbol->setCustomIcon(OcdIcon::toQImage(ocd_base_symbol.icon));
+}
+
+
+template<>
+void OcdFileImport::dropRedundantIcon<Ocd::BaseSymbolV8>(Symbol* symbol, const Ocd::BaseSymbolV8& ocd_base_symbol)
+try
+{
+	const auto imported = symbol->getCustomIcon();
+	if (imported.isNull())
+		return;
+	
+	// The comparison is done in OCD format, due to the limited color palette.
+	symbol->setCustomIcon({});
+	auto ocd_icon = OcdIcon{*map, *symbol};
+	if (ocd_base_symbol.flags & Ocd::SymbolIconCompressedV8)
+	{
+		if (ocd_base_symbol.icon.uncompress() != ocd_icon)
+			symbol->setCustomIcon(imported);
+	}
+	else
+	{
+		if (ocd_base_symbol.icon != ocd_icon)
+			symbol->setCustomIcon(imported);
+	}
+}
+catch (std::logic_error&)
+{
+	// In general, ocd_base_symbol.icon.uncompress() can throw. But here,
+	// it is called after successful icon import - which indicates that
+	// uncompress() does not fail for ocd_base_symbol.icon.
+}
+
+template<class OcdBaseSymbol>
+void OcdFileImport::dropRedundantIcon(Symbol* symbol, const OcdBaseSymbol& ocd_base_symbol)
+{
+	const auto imported = symbol->getCustomIcon();
+	if (imported.isNull())
+		return;
+	
+	// The comparison is done in OCD format, due to the limited color palette.
+	symbol->setCustomIcon({});
+	if (ocd_base_symbol.icon != OcdIcon{*map, *symbol})
+		symbol->setCustomIcon(imported);
 }
 
 
@@ -1085,7 +1176,7 @@ PointSymbol* OcdFileImport::importPointSymbol(const S& ocd_symbol)
 	auto symbol = new OcdImportedPointSymbol();
 	setupBaseSymbol(symbol, ocd_symbol.base);
 	setupPointSymbolPattern(symbol, ocd_symbol.data_size, ocd_symbol.begin_of_elements);
-	symbol->setRotatable(ocd_symbol.base.flags & 1);
+	symbol->setRotatable(ocd_symbol.base.flags & Ocd::SymbolRotatable);
 	return symbol;
 }
 
@@ -1095,8 +1186,9 @@ Symbol* OcdFileImport::importLineSymbol(const S& ocd_symbol)
 	using OcdLineSymbolCommon = Ocd::LineSymbolCommonV8;
 	
 	// Import a main line.
-	auto main_line = importLineSymbolBase(ocd_symbol.common);
+	auto main_line = new OcdImportedLineSymbol();
 	setupBaseSymbol(main_line, ocd_symbol.base);
+	importLineSymbolBase(main_line, ocd_symbol.common);
 	setupLineSymbolPointSymbols(main_line, ocd_symbol.common, ocd_symbol.begin_of_elements);
 	
 	// Import a 'framing' line?
@@ -1149,12 +1241,11 @@ Symbol* OcdFileImport::importLineSymbol(const S& ocd_symbol)
 	return combined_line;
 }
 
-OcdFileImport::OcdImportedLineSymbol* OcdFileImport::importLineSymbolBase(const Ocd::LineSymbolCommonV8& attributes)
+void OcdFileImport::importLineSymbolBase(OcdImportedLineSymbol* symbol, const Ocd::LineSymbolCommonV8& attributes)
 {
 	using LineStyle = Ocd::LineSymbolCommonV8;
 	
 	// Basic line options
-	auto symbol = new OcdImportedLineSymbol();
 	symbol->line_width = convertLength(attributes.line_width);
 	symbol->color = symbol->line_width ? convertColor(attributes.line_color) : nullptr;
 	
@@ -1192,21 +1283,14 @@ OcdFileImport::OcdImportedLineSymbol* OcdFileImport::importLineSymbolBase(const 
 		break;
 	}
 	
+	symbol->start_offset = std::max(0, convertLength(attributes.dist_from_start));
+	symbol->end_offset = std::max(0, convertLength(attributes.dist_from_end));
 	if (symbol->cap_style == LineSymbol::PointedCap)
 	{
-		auto ocd_length = attributes.dist_from_start;
-		if (attributes.dist_from_start != attributes.dist_from_end)
-		{
-			// FIXME: Different lengths for start and end length of pointed line ends are not supported yet, so take the average
-			ocd_length = (attributes.dist_from_start + attributes.dist_from_end) / 2;
-			addSymbolWarning( symbol,
-			  tr("Different lengths for pointed caps at begin (%1 mm) and end (%2 mm) are not supported. Using %3 mm.").
-			  arg(locale.toString(0.001f * convertLength(attributes.dist_from_start)),
-			      locale.toString(0.001f * convertLength(attributes.dist_from_end)),
-			      locale.toString(0.001f * convertLength(ocd_length))) );
-		}
-		symbol->pointed_cap_length = convertLength(ocd_length);
-		symbol->join_style = LineSymbol::RoundJoin;	// NOTE: while the setting may be different (see what is set in the first place), OC*D always draws round joins if the line cap is pointed!
+		// Note: While the property in the file may be different
+		// (cf. what is set in the first place), OC*D always
+		// draws round joins if the line cap is pointed!
+		symbol->join_style = LineSymbol::RoundJoin;
 	}
 	
 	// Handle the dash pattern
@@ -1290,8 +1374,6 @@ OcdFileImport::OcdImportedLineSymbol* OcdFileImport::importLineSymbolBase(const 
 		symbol->segment_length = convertLength(attributes.main_length);
 		symbol->end_length = convertLength(attributes.end_length);
 	}
-	
-	return symbol;
 }
 
 void OcdFileImport::setupLineSymbolFraming(OcdFileImport::OcdImportedLineSymbol* framing_line, const Ocd::LineSymbolCommonV8& attributes, const LineSymbol* main_line)
@@ -2082,13 +2164,25 @@ void OcdFileImport::fillPathCoords(OcdImportedPathObject *object, bool is_area, 
 			if (!object->coords[i].isHolePoint() && i < object->coords.size() - 1)
 				continue;
 			
-			if (object->coords[i].isPositionEqualTo(object->coords[start]))
+			auto coord = object->coords[start];
+			coord.setHolePoint(object->coords[i].isHolePoint());
+			coord.setClosePoint(true);
+			coord.setCurveStart(false);
+			if (object->coords[i].isPositionEqualTo(coord))
 			{
-				MapCoord coord = object->coords[start];
-				coord.setCurveStart(false);
-				coord.setHolePoint(true);
-				coord.setClosePoint(true);
-				object->coords[i] = coord;
+				// This segment has the canonical closed form: The coordinates
+				// of the last point are identical to the first point.
+				object->coords[i].setFlags(coord.flags());
+			}
+			else if (is_area)
+			{
+				// We need to turn the segment into the canonical closed form
+				// by inserting an extra end point.
+				using difference_type = decltype(object->coords)::difference_type;
+				auto const after_i = begin(object->coords) + static_cast<difference_type>(i + 1);
+				object->coords.insert(after_i, coord);
+				object->coords[i].setHolePoint(false);
+				++i;
 			}
 			
 			switch (i - start)
@@ -2263,10 +2357,7 @@ void OcdFileImport::setFraming(OcdFileImport::OcdImportedTextSymbol* symbol, con
 
 bool OcdFileImport::importImplementation()
 {
-	Q_ASSERT(buffer.isEmpty());
-	
-	buffer.clear();
-	buffer.append(device()->readAll());
+	buffer = device()->readAll();
 	if (buffer.isEmpty())
 		throw FileFormatException(device()->errorString());
 	

@@ -146,7 +146,7 @@ public:
 	 * Note: Since QObjects may not be copied, this is better understood as
 	 * creating a new object with the same settings.
 	 */
-	Georeferencing(const Georeferencing& georeferencing);
+	Georeferencing(const Georeferencing& other);
 	
 	/** 
 	 * Cleans up memory allocated by the georeferencing 
@@ -267,7 +267,7 @@ public:
 	 * 
 	 * This will also affect the grivation value and the transformations.
 	 */
-	void setDeclination(double declination);
+	void setDeclination(double value);
 	
 	
 	/**
@@ -306,7 +306,7 @@ public:
 	 * 
 	 * This will also affect the declination value and the transformations.
 	 */
-	void setGrivation(double grivation);
+	void setGrivation(double value);
 	
 	
 	/**
@@ -319,7 +319,7 @@ public:
 	 * 
 	 * This will <b>not</b> update the map and geographic coordinates of the reference point.
 	 */
-	void setMapRefPoint(MapCoord point);
+	void setMapRefPoint(const MapCoord& point);
 	
 	
 	/**
@@ -333,7 +333,7 @@ public:
 	 * This may trigger changes of the geographic coordinates of the reference
 	 * point, the convergence, the grivation and the transformations.
 	 */
-	void setProjectedRefPoint(QPointF point, bool update_grivation = true);
+	void setProjectedRefPoint(const QPointF& point, bool update_grivation = true);
 	
 	
 	/**

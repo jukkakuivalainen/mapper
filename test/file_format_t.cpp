@@ -21,8 +21,11 @@
 #include "file_format_t.h"
 
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <numeric>
+#include <stdexcept>
 
 #include <Qt>
 #include <QtGlobal>
@@ -62,6 +65,8 @@
 #include "fileformats/file_import_export.h"
 #include "fileformats/ocd_file_export.h"
 #include "fileformats/ocd_file_format.h"
+#include "fileformats/ocd_types_v8.h"
+#include "fileformats/ocd_types_v9.h"
 #include "fileformats/xml_file_format.h"
 #include "templates/template.h"
 #include "undo/undo.h"
@@ -426,7 +431,7 @@ void FileFormatTest::understandsTest()
 		QEXPECT_FAIL("", "OCD format not support on big endian systems", Abort);
 #endif
 	QVERIFY(format);
-	QVERIFY(format->supportsImport());
+	QVERIFY(format->supportsReading());
 	QCOMPARE(int(format->understands(data.constData(), data.length())), support);
 }
 
@@ -520,6 +525,52 @@ void FileFormatTest::issue_513_high_coordinates()
 
 
 
+void FileFormatTest::compressedOcdIconTest()
+{
+	using std::begin;
+	using std::end;
+	
+	{
+		Ocd::IconV9 icon;
+		
+		// White background
+		std::fill(begin(icon.bits), end(icon.bits), 124);
+		QCOMPARE(icon.compress().uncompress(), icon);
+		
+		// Black bar on white background
+		std::fill(begin(icon.bits)+44, begin(icon.bits)+88, 0);
+		QCOMPARE(icon.compress().uncompress(), icon);
+		
+		// 250 non-repeating bytes of input, followed by white
+		// => cannot compress to less than 256 bytes
+		std::iota(begin(icon.bits), begin(icon.bits)+125, 0);
+		std::transform(begin(icon.bits), begin(icon.bits)+63, begin(icon.bits)+125, [](auto value) {
+			return value * 2;
+		});
+		std::transform(begin(icon.bits), begin(icon.bits)+62, begin(icon.bits)+188, [](auto value) {
+			return value * 2 + 1;
+		});
+		QVERIFY_EXCEPTION_THROWN(icon.compress(), std::length_error);
+		
+		// 197 non-repeating bytes of input, followed by white
+		// => cannot compress to less than 256 bytes
+		std::fill(begin(icon.bits)+197, end(icon.bits), 124);
+		QVERIFY_EXCEPTION_THROWN(icon.compress(), std::length_error);
+		
+		// 196 non-repeating bytes of input, followed by white
+		std::fill(begin(icon.bits)+196, end(icon.bits), 124);
+		QCOMPARE(icon.compress().uncompress(), icon);
+		
+		QCOMPARE(int(*std::max_element(begin(icon.bits), end(icon.bits))), 124);
+	}		
+	{
+		Ocd::IconV8 icon {};
+		QVERIFY_EXCEPTION_THROWN(icon.uncompress(), std::domain_error);
+	}
+}
+
+
+
 void FileFormatTest::saveAndLoad_data()
 {
 	// Add all file formats which support import and export
@@ -540,7 +591,8 @@ void FileFormatTest::saveAndLoad_data()
 		auto format = FileFormats.findFormat(format_id);
 		QVERIFY(format);
 		QCOMPARE(format->fileType(), FileFormat::MapFile);
-		QVERIFY(format->supportsImport() || format->supportsExport());
+		QVERIFY(format->supportsReading());
+		QVERIFY(format->supportsWriting());
 		
 		for (auto raw_path : example_files)
 		{
@@ -612,7 +664,7 @@ void FileFormatTest::saveAndLoad()
 	
 	// If the export is lossy, do an extra export / import cycle in order to
 	// be independent of information which cannot be exported into this format
-	if (new_map && format->isExportLossy())
+	if (new_map && format->isWritingLossy())
 	{
 		fuzzyCompareMaps(*new_map, *original);
 		

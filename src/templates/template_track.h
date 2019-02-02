@@ -29,8 +29,8 @@
 #include <QRectF>
 #include <QString>
 
+#include "core/track.h"
 #include "templates/template.h"
-#include "sensors/gps_track.h"
 
 class QByteArray;
 class QPainter;
@@ -74,6 +74,7 @@ public:
     QRectF calculateTemplateBoundingBox() const override;
     int getTemplateBoundingBoxPixelBorder() override;
 	
+	bool hasAlpha() const override;
 	
 	/// Draws all tracks.
 	void drawTracks(QPainter* painter, bool on_screen) const;

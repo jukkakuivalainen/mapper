@@ -55,6 +55,7 @@ PATTERN=" \
   file_import_export.cpp \
   georeferencing_dialog.cpp \
   gdal_manager.cpp \
+  gps_display.cpp \
   key_button_bar.cpp \
   line_symbol.cpp \
   /map.cpp \
@@ -76,6 +77,7 @@ PATTERN=" \
   symbol_t.cpp \
   tag_select_widget.cpp \
   template_image.cpp \
+  template_list_widget.cpp \
   template_tool \
   text_brwoser_dialog \
   undo_manager.cpp \

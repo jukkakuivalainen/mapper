@@ -58,6 +58,7 @@ set(Mapper_Common_SRCS
   core/map_view.cpp
   core/path_coord.cpp
   core/storage_location.cpp
+  core/track.cpp
   core/virtual_coord_vector.cpp
   core/virtual_path.cpp
   
@@ -87,6 +88,7 @@ set(Mapper_Common_SRCS
   fileformats/ocd_file_format.cpp
   fileformats/ocd_file_import.cpp
   fileformats/ocd_georef_fields.cpp
+  fileformats/ocd_icon.cpp
   fileformats/ocd_types.cpp
   fileformats/xml_file_format.cpp
   
@@ -120,6 +122,7 @@ set(Mapper_Common_SRCS
   
   gui/symbols/area_symbol_settings.cpp
   gui/symbols/combined_symbol_settings.cpp
+  gui/symbols/icon_properties_widget.cpp
   gui/symbols/line_symbol_settings.cpp
   gui/symbols/point_symbol_editor_widget.cpp
   gui/symbols/point_symbol_settings.cpp
@@ -156,7 +159,6 @@ set(Mapper_Common_SRCS
   sensors/compass.cpp
   sensors/gps_display.cpp
   sensors/gps_temporary_markers.cpp
-  sensors/gps_track.cpp
   sensors/gps_track_recorder.cpp
   
   templates/template.cpp

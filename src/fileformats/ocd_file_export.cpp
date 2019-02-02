@@ -24,29 +24,26 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <utility>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 
 #include <Qt>
 #include <QtGlobal>
 #include <QtMath>
-#include <QColor>
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QFlags>
 #include <QFontMetricsF>
 #include <QIODevice>
-#include <QImage>
 #include <QLatin1Char>
 #include <QLatin1String>
 #include <QPoint>
 #include <QPointF>
 #include <QRectF>
-#include <QRgb>
 #include <QString>
 #include <QTextCodec>
 #include <QTextDecoder>
@@ -76,6 +73,7 @@
 #include "fileformats/file_import_export.h"
 #include "fileformats/ocd_file_format.h"
 #include "fileformats/ocd_georef_fields.h"
+#include "fileformats/ocd_icon.h"
 #include "fileformats/ocd_types.h"
 #include "fileformats/ocd_types_v8.h"
 #include "fileformats/ocd_types_v9.h"
@@ -293,299 +291,6 @@ int convertRotation(qreal angle)
 }
 
 
-int getPaletteColorV6(QRgb rgb)
-{
-	Q_ASSERT(qAlpha(rgb) == 255);
-	
-	// Quickly return for most frequent value
-	if (rgb == qRgb(255, 255, 255))
-		return 15;
-	
-	auto color = QColor(rgb).toHsv();
-	if (color.hue() == -1 || color.saturation() < 32)
-	{
-		auto gray = qGray(rgb);  // qGray is used for dithering
-		if (gray >= 192)
-			return 8;
-		if (gray >= 128)
-			return 7;
-		return 0;
-	}
-	
-	struct PaletteColor
-	{
-		int hue;
-		int saturation;
-		int value;
-	};
-	static const PaletteColor palette[16] = {
-	    {  -1,   0,   0 },
-	    {   0, 255, 128 },
-	    { 120, 255, 128 },
-	    {  60, 255, 128 },
-	    { 240, 255, 128 },
-	    { 300, 255, 128 },
-	    { 180, 255, 128 },
-	    {  -1,   0, 128 },
-	    {  -1,   0, 192 },
-	    {   0, 255, 255 },
-	    { 120, 255, 255 },
-	    {  60, 255, 255 },
-	    { 240, 255, 255 },
-	    { 300, 255, 255 },
-	    { 180, 255, 255 },
-	    {  -1,   0, 255 },
-	};
-	
-#if 0
-	// This is how `palette` is generated.
-	static auto generate = true;
-	if (generate)
-	{
-		static const QColor original_palette[16] = {
-			QColor(  0,   0,   0).toHsv(),
-			QColor(128,   0,   0).toHsv(),
-			QColor(0,   128,   0).toHsv(),
-			QColor(128, 128,   0).toHsv(),
-			QColor(  0,   0, 128).toHsv(),
-			QColor(128,   0, 128).toHsv(),
-			QColor(  0, 128, 128).toHsv(),
-			QColor(128, 128, 128).toHsv(),
-			QColor(192, 192, 192).toHsv(),
-			QColor(255,   0,   0).toHsv(),
-			QColor(  0, 255,   0).toHsv(),
-			QColor(255, 255,   0).toHsv(),
-			QColor(  0,   0, 255).toHsv(),
-			QColor(255,   0, 255).toHsv(),
-			QColor(  0, 255, 255).toHsv(),
-			QColor(255, 255, 255).toHsv()
-		};
-		
-		for (auto& c : original_palette)
-		{
-			qDebug("		{ %3d, %3d, %3d },", c.hue(), c.saturation(), c.value());
-		}
-		generate = false;
-	}
-#endif
-	
-	int best_index = 0;
-	auto best_distance = 2100000;  // > 6 * (10*sq(180) + sq(128) + sq(64))
-	auto sq = [](int n) { return n*n; };
-	for (auto i : { 1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14 })
-	{
-		// True color
-		const auto& palette_color = palette[i];
-		auto hue_dist = std::abs(color.hue() - palette_color.hue);
-		auto distance = 10 * sq(std::min(hue_dist, 360 - hue_dist))
-		                + sq(color.saturation() - palette_color.saturation)
-		                + sq(color.value() - palette_color.value);
-		
-		// (Too much) manual tweaking for orienteering colors
-		if (i == 1)
-			distance *= 3;	// Dark red
-		else if (i == 3)
-			distance *= 4;		// Olive
-		else if (i == 11)
-			distance *= 4;		// Yellow
-		else if (i == 9)
-			distance *= 6;		// Red is unlikely
-		else
-			distance *= 2;
-		
-		if (distance < best_distance)
-		{
-			best_distance = distance;
-			best_index = i;
-		}
-	}
-	return best_index;
-}
-
-
-quint8 getPaletteColorV9(QRgb rgb)
-{
-	Q_ASSERT(qAlpha(rgb) == 255);
-	
-	// Quickly return most frequent value
-	if (rgb == qRgb(255, 255, 255))
-		return 124;
-	
-	struct PaletteColor
-	{
-		int r;
-		int g;
-		int b;
-	};
-	static const PaletteColor palette[125] = {
-	    {   0,   0,   0 },
-	    {   0,   0,  64 },
-	    {   0,   0, 128 },
-	    {   0,   0, 192 },
-	    {   0,   0, 255 },
-	    {   0,  64,   0 },
-	    {   0,  64,  64 },
-	    {   0,  64, 128 },
-	    {   0,  64, 192 },
-	    {   0,  64, 255 },
-	    {   0, 128,   0 },
-	    {   0, 128,  64 },
-	    {   0, 128, 128 },
-	    {   0, 128, 192 },
-	    {   0, 128, 255 },
-	    {   0, 192,   0 },
-	    {   0, 192,  64 },
-	    {   0, 192, 128 },
-	    {   0, 192, 192 },
-	    {   0, 192, 255 },
-	    {   0, 255,   0 },
-	    {   0, 255,  64 },
-	    {   0, 255, 128 },
-	    {   0, 255, 192 },
-	    {   0, 255, 255 },
-	    {  64,   0,   0 },
-	    {  64,   0,  64 },
-	    {  64,   0, 128 },
-	    {  64,   0, 192 },
-	    {  64,   0, 255 },
-	    {  64,  64,   0 },
-	    {  64,  64,  64 },
-	    {  64,  64, 128 },
-	    {  64,  64, 192 },
-	    {  64,  64, 255 },
-	    {  64, 128,   0 },
-	    {  64, 128,  64 },
-	    {  64, 128, 128 },
-	    {  64, 128, 192 },
-	    {  64, 128, 255 },
-	    {  64, 192,   0 },
-	    {  64, 192,  64 },
-	    {  64, 192, 128 },
-	    {  64, 192, 192 },
-	    {  64, 192, 255 },
-	    {  64, 255,   0 },
-	    {  64, 255,  64 },
-	    {  64, 255, 128 },
-	    {  64, 255, 192 },
-	    {  64, 255, 255 },
-	    { 128,   0,   0 },
-	    { 128,   0,  64 },
-	    { 128,   0, 128 },
-	    { 128,   0, 192 },
-	    { 128,   0, 255 },
-	    { 128,  64,   0 },
-	    { 128,  64,  64 },
-	    { 128,  64, 128 },
-	    { 128,  64, 192 },
-	    { 128,  64, 255 },
-	    { 128, 128,   0 },
-	    { 128, 128,  64 },
-	    { 128, 128, 128 },
-	    { 128, 128, 192 },
-	    { 128, 128, 255 },
-	    { 128, 192,   0 },
-	    { 128, 192,  64 },
-	    { 128, 192, 128 },
-	    { 128, 192, 192 },
-	    { 128, 192, 255 },
-	    { 128, 255,   0 },
-	    { 128, 255,  64 },
-	    { 128, 255, 128 },
-	    { 128, 255, 192 },
-	    { 128, 255, 255 },
-	    { 192,   0,   0 },
-	    { 192,   0,  64 },
-	    { 192,   0, 128 },
-	    { 192,   0, 192 },
-	    { 192,   0, 255 },
-	    { 192,  64,   0 },
-	    { 192,  64,  64 },
-	    { 192,  64, 128 },
-	    { 192,  64, 192 },
-	    { 192,  64, 255 },
-	    { 192, 128,   0 },
-	    { 192, 128,  64 },
-	    { 192, 128, 128 },
-	    { 192, 128, 192 },
-	    { 192, 128, 255 },
-	    { 192, 192,   0 },
-	    { 192, 192,  64 },
-	    { 192, 192, 128 },
-	    { 192, 192, 192 },
-	    { 192, 192, 255 },
-	    { 192, 255,   0 },
-	    { 192, 255,  64 },
-	    { 192, 255, 128 },
-	    { 192, 255, 192 },
-	    { 192, 255, 255 },
-	    { 255,   0,   0 },
-	    { 255,   0,  64 },
-	    { 255,   0, 128 },
-	    { 255,   0, 192 },
-	    { 255,   0, 255 },
-	    { 255,  64,   0 },
-	    { 255,  64,  64 },
-	    { 255,  64, 128 },
-	    { 255,  64, 192 },
-	    { 255,  64, 255 },
-	    { 255, 128,   0 },
-	    { 255, 128,  64 },
-	    { 255, 128, 128 },
-	    { 255, 128, 192 },
-	    { 255, 128, 255 },
-	    { 255, 192,   0 },
-	    { 255, 192,  64 },
-	    { 255, 192, 128 },
-	    { 255, 192, 192 },
-	    { 255, 192, 255 },
-	    { 255, 255,   0 },
-	    { 255, 255,  64 },
-	    { 255, 255, 128 },
-	    { 255, 255, 192 },
-	    { 255, 255, 255 },
-	};
-	
-#if 0
-	// This is how `palette` is generated.
-	static auto generate = true;
-	if (generate)
-	{
-		static const int color_levels[5] = { 0x00, 0x40, 0x80, 0xc0, 0xff };
-		for (auto r : color_levels)
-		{
-			for (auto g : color_levels)
-			{
-				for (auto b : color_levels)
-				{
-					qDebug("		{ %3d, %3d, %3d },", r, g, b);
-				}
-			}
-		}
-		generate = false;
-	}
-#endif
-	
-	auto r = qRed(rgb);
-	auto g = qGreen(rgb);
-	auto b = qBlue(rgb);
-	auto sq = [](int n) { return n*n; };
-
-	quint8 best_index = 0;
-	auto best_distance = 10000; // > (2 + 3 + 4) * sq(32)
-	for (quint8 i = 0; i < 125; ++i)
-	{
-		auto palette_color = palette[i];
-		auto distance = 2 * sq(r - palette_color.r) + 4 * sq(g - palette_color.g) + 3 * sq(b - palette_color.b);
-		if (distance < best_distance)
-		{
-			best_distance = distance;
-			best_index = i;
-		}
-	}
-	return best_index;
-}
-
-
 
 int getPatternSize(const PointSymbol* point)
 {
@@ -662,8 +367,8 @@ QString stringForSpotColor(int i, const MapColor& color)
 	    << "\tm" << qRound(cmyk.m * 200)/2.0
 	    << "\ty" << qRound(cmyk.y * 200)/2.0
 	    << "\tk" << qRound(cmyk.k * 200)/2.0
-	    << "\tf" << 1500.0
-	    << "\ta" << 45.0;
+	    << "\tf" << color.getScreenFrequency() * 10
+	    << "\ta" << color.getScreenAngle();
 	return string_10;
 }
 
@@ -1049,7 +754,7 @@ void OcdFileExport::exportSetup(OcdFile<Ocd::FormatV8>& file)
 			quint16 number = 0;
 			for (auto i = 0; i < num_colors; ++i)
 			{
-				const auto current = map->getColor(i);
+				const auto* current = map->getColor(i);
 				if (current == color)
 					break;
 				if (current->getSpotColorMethod() == MapColor::SpotColor)
@@ -1086,7 +791,7 @@ void OcdFileExport::exportSetup(OcdFile<Ocd::FormatV8>& file)
 		
 		for (int i = 0; i < num_colors; ++i)
 		{
-			const auto color = map->getColor(i);
+			const auto* color = map->getColor(i);
 			const auto& cmyk = color->getCmyk();
 			// OC*D stores CMYK values as integers from 0-200.
 			auto ocd_cmyk = Ocd::CmykV8 {
@@ -1100,8 +805,8 @@ void OcdFileExport::exportSetup(OcdFile<Ocd::FormatV8>& file)
 			{
 				separation_info->name = toOcdString(color->getSpotColorName());
 				separation_info->cmyk = ocd_cmyk;
-				separation_info->raster_freq = 1500;  /// \todo Spot color raster frequency
-				separation_info->raster_angle = 450;  /// \todo Spot color raster angle
+				separation_info->raster_freq = quint16(qRound(10 * color->getScreenFrequency()));
+				separation_info->raster_angle = quint16(qRound(10 * color->getScreenAngle()));
 				++separation_info;
 				
 				if (ocd_number >= begin_of_spot_colors)
@@ -1228,7 +933,7 @@ void OcdFileExport::exportSetup()
 		SpotColorComponents all_spot_colors;
 		for (int i = 0; i < num_colors; ++i)
 		{
-			const auto color = map->getColor(i);
+			const auto* color = map->getColor(i);
 			if (color->getSpotColorMethod() == MapColor::SpotColor)
 			{
 				all_spot_colors.push_back({color, 1});
@@ -1243,7 +948,7 @@ void OcdFileExport::exportSetup()
 	
 	for (int i = 0; i < num_colors; ++i)
 	{
-		const auto color = map->getColor(i);
+		const auto* color = map->getColor(i);
 		if (color->getSpotColorMethod() == MapColor::SpotColor)
 		{
 			addParameterString(10, stringForSpotColor(spot_number++, *color));
@@ -1267,7 +972,7 @@ void OcdFileExport::exportSymbols(OcdFile<Format>& file)
 	// First pass: Collect unique symbol numbers (i.e. skip duplicates)
 	for (int i = 0; i < num_symbols; ++i)
 	{
-		const auto symbol = map->getSymbol(i);
+		const auto* symbol = map->getSymbol(i);
 		auto number = makeSymbolNumber(symbol, Format::BaseSymbol::symbol_number_factor);
 		auto matches_symbol_number = [number](const auto& entry) { return number == entry.second; };
 		if (!std::any_of(begin(symbol_numbers), end(symbol_numbers), matches_symbol_number))
@@ -1277,7 +982,7 @@ void OcdFileExport::exportSymbols(OcdFile<Format>& file)
 	// Second pass: Turn duplicate symbol numbers into unique numbers
 	for (int i = 0; i < num_symbols; ++i)
 	{
-		const auto symbol = map->getSymbol(i);
+		const auto* symbol = map->getSymbol(i);
 		if (symbol_numbers.find(symbol) != end(symbol_numbers))
 			continue;
 			
@@ -1290,7 +995,7 @@ void OcdFileExport::exportSymbols(OcdFile<Format>& file)
 	{
 		QByteArray ocd_symbol;
 		
-		const auto symbol = map->getSymbol(i);
+		const auto* symbol = map->getSymbol(i);
 		switch(symbol->getType())
 		{
 		case Symbol::Point:
@@ -1363,17 +1068,26 @@ void OcdFileExport::setupBaseSymbol(const Symbol* symbol, quint32 symbol_number,
 		}
 	}
 	
-	/// \todo Switch to explicit types for icon data
-	switch (std::extent<typename std::remove_pointer<decltype(ocd_base_symbol.icon_bits)>::type>::value)
-	{
-	case 264:
-		exportSymbolIconV6(symbol, ocd_base_symbol.icon_bits);
-		break;
-		
-	case 484:
-		exportSymbolIconV9(symbol, ocd_base_symbol.icon_bits);
-		break;
-	}
+	setupIcon(symbol, ocd_base_symbol);
+}
+
+
+template< >
+void OcdFileExport::setupIcon<Ocd::BaseSymbolV8>(const Symbol* symbol, Ocd::BaseSymbolV8& ocd_base_symbol)
+try {
+	ocd_base_symbol.icon = Ocd::IconV9(OcdIcon{*map, *symbol}).compress();
+	ocd_base_symbol.flags |= 0x02;
+}
+catch (std::logic_error& e)
+{
+	addWarning(tr(e.what()));
+	ocd_base_symbol.icon = OcdIcon{*map, *symbol};
+}
+
+template< class OcdBaseSymbol >
+void OcdFileExport::setupIcon(const Symbol* symbol, OcdBaseSymbol& ocd_base_symbol)
+{
+	ocd_base_symbol.icon = OcdIcon{*map, *symbol};
 }
 
 
@@ -1389,7 +1103,7 @@ QByteArray OcdFileExport::exportPointSymbol(const PointSymbol* point_symbol)
 	if (ocd_symbol.base.extent <= 0)
 		ocd_symbol.base.extent = 100;
 	if (point_symbol->isRotatable())
-		ocd_symbol.base.flags |= 1;
+		ocd_symbol.base.flags |= Ocd::SymbolRotatable;
 	
 	auto pattern_size = getPatternSize(point_symbol);
 	auto header_size = int(sizeof(OcdPointSymbol) - sizeof(typename OcdPointSymbol::Element));
@@ -1516,7 +1230,7 @@ QByteArray OcdFileExport::exportAreaSymbol(const AreaSymbol* area_symbol, quint3
 	OcdAreaSymbol ocd_symbol = {};
 	setupBaseSymbol<typename OcdAreaSymbol::BaseSymbol>(area_symbol, symbol_number, ocd_symbol.base);
 	ocd_symbol.base.type = Ocd::SymbolTypeArea;
-	ocd_symbol.base.flags = exportAreaSymbolCommon(area_symbol, ocd_symbol.common, pattern_symbol);
+	ocd_symbol.base.flags |= exportAreaSymbolCommon(area_symbol, ocd_symbol.common, pattern_symbol);
 	exportAreaSymbolSpecial<OcdAreaSymbol>(area_symbol, ocd_symbol);
 	
 	auto pattern_size = getPatternSize(pattern_symbol);
@@ -1564,7 +1278,7 @@ quint8 OcdFileExport::exportAreaSymbolCommon(const AreaSymbol* area_symbol, OcdA
 					ocd_area_common.hatch_dist = decltype(ocd_area_common.hatch_dist)(convertSize(pattern.line_spacing));
 				ocd_area_common.hatch_angle_1 = decltype(ocd_area_common.hatch_angle_1)(convertRotation(pattern.angle));
 				if (pattern.rotatable())
-					flags |= 1;
+					flags |= Ocd::SymbolRotatable;
 				break;
 			case Ocd::HatchSingle:
 				if (ocd_area_common.hatch_color == convertColor(pattern.line_color))
@@ -1577,7 +1291,7 @@ quint8 OcdFileExport::exportAreaSymbolCommon(const AreaSymbol* area_symbol, OcdA
 						ocd_area_common.hatch_dist = decltype(ocd_area_common.hatch_dist)(ocd_area_common.hatch_dist + convertSize(pattern.line_spacing)) / 2;
 					ocd_area_common.hatch_angle_2 = decltype(ocd_area_common.hatch_angle_2)(convertRotation(pattern.angle));
 					if (pattern.rotatable())
-						flags |= 1;
+						flags |= Ocd::SymbolRotatable;
 					break;
 				}
 				// fall through
@@ -1596,7 +1310,7 @@ quint8 OcdFileExport::exportAreaSymbolCommon(const AreaSymbol* area_symbol, OcdA
 				ocd_area_common.structure_angle = decltype(ocd_area_common.structure_angle)(convertRotation(pattern.angle));
 				pattern_symbol = pattern.point;
 				if (pattern.rotatable())
-					flags |= 1;
+					flags |= Ocd::SymbolRotatable;
 				break;
 			case Ocd::StructureAlignedRows:
 				ocd_area_common.structure_mode = Ocd::StructureShiftedRows;
@@ -1730,11 +1444,8 @@ quint32 OcdFileExport::exportLineSymbolCommon(const LineSymbol* line_symbol, Ocd
 			ocd_line_common.line_style = 0;
 	}
 	
-	if (line_symbol->getCapStyle() == LineSymbol::PointedCap)
-	{
-		ocd_line_common.dist_from_start = convertSize(line_symbol->getPointedCapLength());
-		ocd_line_common.dist_from_end = convertSize(line_symbol->getPointedCapLength());
-	}
+	ocd_line_common.dist_from_start = convertSize(line_symbol->startOffset());
+	ocd_line_common.dist_from_end = convertSize(line_symbol->endOffset());
 	
 	// Dash pattern
 	if (line_symbol->isDashed())
@@ -2179,7 +1890,7 @@ void OcdFileExport::exportCombinedSymbol(OcdFile<Format>& file, const CombinedSy
 			
 			auto copy = duplicate(static_cast<const AreaSymbol&>(*parts[0]));
 			copySymbolHead(*combined_symbol, *copy);
-			file.symbols().insert(exportCombinedAreaSymbol<typename Format::AreaSymbol>(symbol_number, copy.get(), border_symbol));
+			file.symbols().insert(exportCombinedAreaSymbol<typename Format::AreaSymbol>(symbol_number, combined_symbol, copy.get(), border_symbol));
 			return;
 		}
 		
@@ -2219,7 +1930,7 @@ void OcdFileExport::exportCombinedSymbol(OcdFile<Format>& file, const CombinedSy
 			// Line symbol with framing and/or double line
 			auto copy = duplicate(static_cast<const LineSymbol&>(*main_line));
 			copySymbolHead(*combined_symbol, *copy);
-			file.symbols().insert(exportCombinedLineSymbol<typename Format::LineSymbol>(symbol_number, copy.get(), framing, double_line));
+			file.symbols().insert(exportCombinedLineSymbol<typename Format::LineSymbol>(symbol_number, combined_symbol, copy.get(), framing, double_line));
 			return;
 		}
 		break;
@@ -2244,6 +1955,9 @@ void OcdFileExport::exportGenericCombinedSymbol(OcdFile<Format>& file, const Com
 	for (int i = 0; i < combined_symbol->getNumParts(); ++i)
 	{
 		const Symbol* part = combined_symbol->getPart(i);
+		if (!part)
+			continue;
+		
 		QByteArray ocd_data;
 		quint8 type = 0;
 		switch (part->getType())
@@ -2300,17 +2014,26 @@ void OcdFileExport::exportGenericCombinedSymbol(OcdFile<Format>& file, const Com
 
 
 template< >
-QByteArray OcdFileExport::exportCombinedAreaSymbol<Ocd::AreaSymbolV8>(quint32 /*symbol_number*/, const AreaSymbol* /*area_symbol*/, const LineSymbol* /*line_symbol*/)
+QByteArray OcdFileExport::exportCombinedAreaSymbol<Ocd::AreaSymbolV8>(
+        quint32 /*symbol_number*/,
+        const CombinedSymbol* /*combined_symbol*/,
+        const AreaSymbol* /*area_symbol*/,
+        const LineSymbol* /*line_symbol*/)
 {
 	Q_UNREACHABLE();
 }
 
 
 template< class OcdAreaSymbol >
-QByteArray OcdFileExport::exportCombinedAreaSymbol(quint32 symbol_number, const AreaSymbol* area_symbol, const LineSymbol* line_symbol)
+QByteArray OcdFileExport::exportCombinedAreaSymbol(
+        quint32 symbol_number,
+        const CombinedSymbol* combined_symbol,
+        const AreaSymbol* area_symbol,
+        const LineSymbol* line_symbol )
 {
 	auto ocd_symbol = exportAreaSymbol<OcdAreaSymbol>(area_symbol, symbol_number);
 	auto ocd_subsymbol_data = reinterpret_cast<OcdAreaSymbol*>(ocd_symbol.data());
+	setupIcon(combined_symbol, ocd_subsymbol_data->base);
 	ocd_subsymbol_data->common.border_on_V9 = 1;
 	ocd_subsymbol_data->border_symbol = symbol_numbers[line_symbol];
 	return ocd_symbol;
@@ -2318,11 +2041,18 @@ QByteArray OcdFileExport::exportCombinedAreaSymbol(quint32 symbol_number, const 
 
 
 template< class OcdLineSymbol >
-QByteArray OcdFileExport::exportCombinedLineSymbol(quint32 symbol_number, const LineSymbol* main_line, const LineSymbol* framing, const LineSymbol* double_line)
+QByteArray OcdFileExport::exportCombinedLineSymbol(
+        quint32 symbol_number,
+        const CombinedSymbol* combined_symbol,
+        const LineSymbol* main_line,
+        const LineSymbol* framing,
+        const LineSymbol* double_line )
 {
 	auto ocd_symbol = exportLineSymbol<OcdLineSymbol>(main_line, symbol_number);
-	auto& ocd_line_common = reinterpret_cast<OcdLineSymbol*>(ocd_symbol.data())->common;
+	auto ocd_symbol_data = reinterpret_cast<OcdLineSymbol*>(ocd_symbol.data());
+	setupIcon(combined_symbol, ocd_symbol_data->base);
 	
+	auto& ocd_line_common = ocd_symbol_data->common;
 	if (framing)
 	{
 		ocd_line_common.framing_color = convertColor(framing->getColor());
@@ -2351,89 +2081,6 @@ QByteArray OcdFileExport::exportCombinedLineSymbol(quint32 symbol_number, const 
 	}
 	
 	return ocd_symbol;
-}
-
-
-
-void OcdFileExport::exportSymbolIconV6(const Symbol* symbol, quint8 icon_bits[])
-{
-	// Icon: 22x22 with 4 bit palette color, origin at bottom left
-	constexpr int icon_size = 22;
-	QImage image = symbol->createIcon(*map, icon_size, false)
-	               .convertToFormat(QImage::Format_ARGB32_Premultiplied);
-	
-	auto process_pixel = [&image](int x, int y)->int {
-		// Apply premultiplied pixel on white background
-		auto premultiplied = image.pixel(x, y);
-		auto alpha = qAlpha(premultiplied);
-		auto r = 255 - alpha + qRed(premultiplied);
-		auto g = 255 - alpha + qGreen(premultiplied);
-		auto b = 255 - alpha + qBlue(premultiplied);
-		auto pixel = qRgb(r, g, b);
-		
-		// Ordered dithering 2x2 threshold matrix, adjusted for o-map halftones
-		static int threshold[4] = { 24, 192, 136, 80 };
-		auto palette_color = getPaletteColorV6(pixel);
-		switch (palette_color)
-		{
-		case 0:
-			// Black to gray (50%)
-			return  qGray(pixel) < 128-threshold[(x%2 + 2*(y%2))]/2 ? 0 : 7;
-			
-		case 7:
-			// Gray (50%) to light gray 
-			return  qGray(pixel) < 192-threshold[(x%2 + 2*(y%2))]/4 ? 7 : 8;
-			
-		case 8:
-			// Light gray to white
-			return  qGray(pixel) < 256-threshold[(x%2 + 2*(y%2))]/4 ? 8 : 15;
-			
-		case 15:
-			// Pure white
-			return palette_color;
-			
-		default:
-			// Color to white
-			return  QColor(pixel).saturation() >= threshold[(x%2 + 2*(y%2))] ? palette_color : 15;
-		}
-	};
-	
-	for (int y = icon_size - 1; y >= 0; --y)
-	{
-		for (int x = 0; x < icon_size; x += 2)
-		{
-			auto first = process_pixel(x, y);
-			auto second = process_pixel(x+1, y);
-			*(icon_bits++) = quint8((first << 4) + second);
-		}
-		icon_bits++;
-	}
-}
-
-void OcdFileExport::exportSymbolIconV9(const Symbol* symbol, quint8 icon_bits[])
-{
-	// Icon: 22x22 with 8 bit palette color code, origin at bottom left
-	constexpr int icon_size = 22;
-	QImage image = symbol->createIcon(*map, icon_size, true)
-	               .convertToFormat(QImage::Format_ARGB32_Premultiplied);
-	
-	auto process_pixel = [&image](int x, int y)->quint8 {
-		// Apply premultiplied pixel on white background
-		auto premultiplied = image.pixel(x, y);
-		auto alpha = qAlpha(premultiplied);
-		auto r = 255 - alpha + qRed(premultiplied);
-		auto g = 255 - alpha + qGreen(premultiplied);
-		auto b = 255 - alpha + qBlue(premultiplied);
-		return getPaletteColorV9(qRgb(r, g, b));
-	};
-	
-	for (int y = icon_size - 1; y >= 0; --y)
-	{
-		for (int x = 0; x < icon_size; ++x)
-		{
-			*(icon_bits++) = process_pixel(x, y);
-		}
-	}
 }
 
 
@@ -2489,16 +2136,17 @@ void OcdFileExport::exportObjects(OcdFile<Format>& file)
  * Object setup which depends on the type features, not on minor type variations of members.
  */
 template< class OcdObject >
-void handleObjectExtras(OcdObject& ocd_object, typename OcdObject::IndexEntryType& entry)
+void OcdFileExport::handleObjectExtras(const Object* object, OcdObject& ocd_object, typename OcdObject::IndexEntryType& entry)
 {
 	// Extra entry members since V9
 	entry.type = ocd_object.type;
 	entry.status = Ocd::ObjectNormal;
+	entry.color = convertColor(object->getSymbol()->guessDominantColor());
 }
 
 
 template< >
-void handleObjectExtras<Ocd::ObjectV8>(Ocd::ObjectV8& ocd_object, typename Ocd::ObjectV8::IndexEntryType& /*entry*/)
+void OcdFileExport::handleObjectExtras<Ocd::ObjectV8>(const Object* /*object*/, Ocd::ObjectV8& ocd_object, typename Ocd::ObjectV8::IndexEntryType& /*entry*/)
 {
 	switch (ocd_object.type)
 	{
@@ -2588,7 +2236,7 @@ void OcdFileExport::exportPathObject(OcdFile<Format>& file, const PathObject* pa
 				
 				exported_ocd_object.symbol = entry.symbol = decltype(entry.symbol)(breakdown->number);
 				exported_ocd_object.type = decltype(exported_ocd_object.type)(breakdown->type);
-				handleObjectExtras(exported_ocd_object, entry);  // update entry.type if it exists
+				handleObjectExtras(path, exported_ocd_object, entry);  // update entry.type if it exists
 				file.objects().insert(data, entry);
 			}
 			
@@ -2635,8 +2283,7 @@ QByteArray OcdFileExport::exportTextObject(const TextObject* text, typename OcdO
 template< class OcdObject >
 QByteArray OcdFileExport::exportObjectCommon(const Object* object, OcdObject& ocd_object, typename OcdObject::IndexEntryType& entry)
 {
-	
-	auto& coords = object->getRawCoordinateVector();
+	const auto& coords = object->getRawCoordinateVector();
 	QByteArray text_data;
 	switch(ocd_object.type)
 	{
@@ -2660,10 +2307,11 @@ QByteArray OcdFileExport::exportObjectCommon(const Object* object, OcdObject& oc
 		ocd_object.num_items = decltype(ocd_object.num_items)(coords.size());
 	}
 	
-	entry.bottom_left_bound = convertPoint(MapCoord(object->getExtent().bottomLeft()));
-	entry.top_right_bound = convertPoint(MapCoord(object->getExtent().topRight()));
-	handleObjectExtras(ocd_object, entry);
-
+	handleObjectExtras(object, ocd_object, entry);
+	
+	auto bottom_left = MapCoord(object->getExtent().bottomLeft());
+	auto top_right = MapCoord(object->getExtent().topRight());
+	
 	auto header_size = int(sizeof(OcdObject) - sizeof(Ocd::OcdPoint32));
 	auto items_size = int((ocd_object.num_items + ocd_object.num_text) * sizeof(Ocd::OcdPoint32));
 	
@@ -2675,21 +2323,28 @@ QByteArray OcdFileExport::exportObjectCommon(const Object* object, OcdObject& oc
 		switch(ocd_object.type)
 		{
 		case 4:
-			exportTextCoordinatesSingle(static_cast<const TextObject*>(object), data);
+			exportTextCoordinatesSingle(static_cast<const TextObject*>(object), data, bottom_left, top_right);
 			data.append(text_data);
 			break;
 		case 5:
-			exportTextCoordinatesBox(static_cast<const TextObject*>(object), data);
+			exportTextCoordinatesBox(static_cast<const TextObject*>(object), data, bottom_left, top_right);
 			data.append(text_data);
 			break;
 		default:
-			exportCoordinates(coords, object->getSymbol(), data);
+			exportCoordinates(coords, object->getSymbol(), data, bottom_left, top_right);
 		}
 	}
 	Q_ASSERT(data.size() == header_size + items_size);
 	
+	entry.bottom_left_bound = convertPoint(bottom_left);
+	entry.top_right_bound = convertPoint(top_right);
 	entry.size = decltype(entry.size)((Ocd::addPadding(data).size()));
-	if (ocd_version < 11)
+	// According to OCD format 8 documentation, size (aka len) is in bytes
+	// for OCD version 6 and 7 files.
+	// However, in contrast to OCD format 9...12 documentation, size seems to be
+	// in bytes again since version 9, and doing as documented would make files
+	// unusable (due to "damaged objects") in OCD 9 and 10 software.
+	if (ocd_version == 8)
 		entry.size = (entry.size - decltype(entry.size)(header_size)) / sizeof(Ocd::OcdPoint32);
 	
 	return data;
@@ -2708,9 +2363,35 @@ void OcdFileExport::exportTemplates()
 {
 	for (int i = map->getNumTemplates() - 1; i >= 0; --i)
 	{
-		const auto temp = map->getTemplate(i);
-		if (qstrcmp(temp->getTemplateType(), "TemplateImage") == 0
-		    || QFileInfo(temp->getTemplatePath()).suffix().compare(QLatin1String("ocd"), Qt::CaseInsensitive) == 0)
+		const auto* temp = map->getTemplate(i);
+		QString template_path = temp->getTemplatePath();
+		
+		auto supported_by_ocd = false;
+		if (qstrcmp(temp->getTemplateType(), "TemplateImage") == 0)
+		{
+			supported_by_ocd = true;
+			
+			if (temp->isTemplateGeoreferenced())
+			{
+				if (temp->getTemplateState() == Template::Unloaded)
+				{
+					// Try to load the template, so that the positioning gets set.
+					const_cast<Template*>(temp)->loadTemplateFile(false);
+				}
+				
+				if (temp->getTemplateState() != Template::Loaded)
+				{
+					addWarning(tr("Unable to save correct position of missing template: \"%1\"")
+					           .arg(temp->getTemplateFilename()));
+				}
+			}
+		}
+		else if (QFileInfo(template_path).suffix().compare(QLatin1String("ocd"), Qt::CaseInsensitive) == 0)
+		{
+			supported_by_ocd = true;
+		}
+		
+		if (supported_by_ocd)
 		{
 			addParameterString(8, stringForTemplate(*temp, area_offset, ocd_version));
 		}
@@ -2772,12 +2453,28 @@ quint16 OcdFileExport::getPointSymbolExtent(const PointSymbol* symbol) const
 
 quint16 OcdFileExport::exportCoordinates(const MapCoordVector& coords, const Symbol* symbol, QByteArray& byte_array)
 {
+	MapCoord bottom_left{};  // unused
+	MapCoord top_right{};    // unused
+	return exportCoordinates(coords, symbol, byte_array, bottom_left, top_right);
+}
+
+quint16 OcdFileExport::exportCoordinates(const MapCoordVector& coords, const Symbol* symbol, QByteArray& byte_array, MapCoord& bottom_left, MapCoord& top_right)
+{
 	quint16 num_points = 0;
 	bool curve_start = false;
 	bool hole_point = false;
 	bool curve_continue = false;
 	for (const auto& point : coords)
 	{
+		if (point.nativeX() < bottom_left.nativeX())
+			bottom_left.setNativeX(point.nativeX());
+		else if (point.nativeX() > top_right.nativeX())
+			top_right.setNativeX(point.nativeX());
+		if (point.nativeY() > bottom_left.nativeY())
+			bottom_left.setNativeY(point.nativeY());
+		else if (point.nativeY() < top_right.nativeY())
+			top_right.setNativeY(point.nativeY());
+		
 		auto p = convertPoint(point);
 		if (point.isDashPoint())
 		{
@@ -2810,7 +2507,7 @@ quint16 OcdFileExport::exportCoordinates(const MapCoordVector& coords, const Sym
 }
 
 
-quint16 OcdFileExport::exportTextCoordinatesSingle(const TextObject* object, QByteArray& byte_array)
+quint16 OcdFileExport::exportTextCoordinatesSingle(const TextObject* object, QByteArray& byte_array, MapCoord& bottom_left, MapCoord& top_right)
 {
 	if (object->getNumLines() == 0)
 		return 0;
@@ -2828,10 +2525,6 @@ quint16 OcdFileExport::exportTextCoordinatesSingle(const TextObject* object, QBy
 	auto anchor = QPointF(object->getAnchorCoordF());
 	auto anchor_text = map_to_text.map(anchor);
 	
-	auto line0 = object->getLineInfo(0);
-	auto p = convertPoint(MapCoord(text_to_map.map(QPointF(anchor_text.x(), line0->line_y))));
-	byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
-	
 	QRectF bounding_box_text;
 	for (int i = 0; i < object->getNumLines(); ++i)
 	{
@@ -2840,20 +2533,33 @@ quint16 OcdFileExport::exportTextCoordinatesSingle(const TextObject* object, QBy
 		rectIncludeSafe(bounding_box_text, QPointF(info->line_x + info->width, info->line_y + info->descent));
 	}
 	
-	p = convertPoint(MapCoord(text_to_map.map(bounding_box_text.bottomLeft())));
-	byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
-	p = convertPoint(MapCoord(text_to_map.map(bounding_box_text.bottomRight())));
-	byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
-	p = convertPoint(MapCoord(text_to_map.map(bounding_box_text.topRight())));
-	byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
-	p = convertPoint(MapCoord(text_to_map.map(bounding_box_text.topLeft())));
-	byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
+	MapCoord coords[5] = {
+	    MapCoord(text_to_map.map(QPointF(anchor_text.x(), object->getLineInfo(0)->line_y))),
+	    MapCoord(text_to_map.map(bounding_box_text.bottomLeft())),
+	    MapCoord(text_to_map.map(bounding_box_text.bottomRight())),
+	    MapCoord(text_to_map.map(bounding_box_text.topRight())),
+	    MapCoord(text_to_map.map(bounding_box_text.topLeft()))
+	};
+	for (const auto& point : coords)
+	{
+		if (point.nativeX() < bottom_left.nativeX())
+			bottom_left.setNativeX(point.nativeX());
+		else if (point.nativeX() > top_right.nativeX())
+			top_right.setNativeX(point.nativeX());
+		if (point.nativeY() > bottom_left.nativeY())
+			bottom_left.setNativeY(point.nativeY());
+		else if (point.nativeY() < top_right.nativeY())
+			top_right.setNativeY(point.nativeY());
+		
+		const auto p = convertPoint(point);
+		byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
+	}
 	
 	return 5;
 }
 
 
-quint16 OcdFileExport::exportTextCoordinatesBox(const TextObject* object, QByteArray& byte_array)
+quint16 OcdFileExport::exportTextCoordinatesBox(const TextObject* object, QByteArray& byte_array, MapCoord& bottom_left, MapCoord& top_right)
 {
 	if (object->getNumLines() == 0)
 		return 0;
@@ -2871,14 +2577,26 @@ quint16 OcdFileExport::exportTextCoordinatesBox(const TextObject* object, QByteA
 	
 	QTransform transform;
 	transform.rotate(-qRadiansToDegrees(object->getRotation()));
-	auto p = convertPoint(MapCoord(transform.map(QPointF(-object->getBoxWidth() / 2, object->getBoxHeight() / 2)) + object->getAnchorCoordF()));
-	byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
-	p = convertPoint(MapCoord(transform.map(QPointF(object->getBoxWidth() / 2, object->getBoxHeight() / 2)) + object->getAnchorCoordF()));
-	byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
-	p = convertPoint(MapCoord(transform.map(QPointF(object->getBoxWidth() / 2, new_top)) + object->getAnchorCoordF()));
-	byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
-	p = convertPoint(MapCoord(transform.map(QPointF(-object->getBoxWidth() / 2, new_top)) + object->getAnchorCoordF()));
-	byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
+	MapCoord coords[4] = {
+	    MapCoord(transform.map(QPointF(-object->getBoxWidth() / 2, object->getBoxHeight() / 2)) + object->getAnchorCoordF()),
+	    MapCoord(transform.map(QPointF(object->getBoxWidth() / 2, object->getBoxHeight() / 2)) + object->getAnchorCoordF()),
+	    MapCoord(transform.map(QPointF(object->getBoxWidth() / 2, new_top)) + object->getAnchorCoordF()),
+	    MapCoord(transform.map(QPointF(-object->getBoxWidth() / 2, new_top)) + object->getAnchorCoordF())
+	};
+	for (const auto& point : coords)
+	{
+		if (point.nativeX() < bottom_left.nativeX())
+			bottom_left.setNativeX(point.nativeX());
+		else if (point.nativeX() > top_right.nativeX())
+			top_right.setNativeX(point.nativeX());
+		if (point.nativeY() > bottom_left.nativeY())
+			bottom_left.setNativeY(point.nativeY());
+		else if (point.nativeY() < top_right.nativeY())
+			top_right.setNativeY(point.nativeY());
+		
+		const auto p = convertPoint(point);
+		byte_array.append(reinterpret_cast<const char*>(&p), sizeof(p));
+	}
 	
 	return 4;
 }

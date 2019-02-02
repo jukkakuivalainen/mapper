@@ -45,6 +45,12 @@ list(APPEND third_party_components
   libpng
   libtiff
 )
+find_package(Qt5Core REQUIRED QUIET)
+if(NOT ${Qt5Core_VERSION} VERSION_LESS 5.9)
+	list(APPEND third_party_components
+	  libpcre2
+	)
+endif()
 if(NOT APPLE)
 	list(APPEND third_party_components
 	  libcurl
@@ -57,9 +63,14 @@ if(NOT ANDROID AND NOT APPLE)
 	  zlib
 	)
 endif()
-if(ANDROID OR MINGW)
+if(MINGW OR CMAKE_ANDROID_STL_TYPE MATCHES "gnustl")
 	list(APPEND third_party_components
 	  gnustl
+	)
+endif()
+if(ANDROID_STL MATCHES "c\\+\\+")
+	list(APPEND third_party_components
+	  libc++
 	)
 endif()
 
@@ -80,6 +91,7 @@ list(APPEND common_license_names
 set(package_names
   libcurl:curl
   libexpat:expat
+  libpcre2:pcre2
   libpcre3:pcre3
   libsqlite:sqlite3
   libtiff:tiff

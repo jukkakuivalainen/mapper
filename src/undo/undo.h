@@ -65,7 +65,8 @@ public:
 		ValidNoOpUndoStepType      =   6,
 		ObjectTagsUndoStepType     =   7,
 		MapPartUndoStepType        =   8,
-		SwitchPartUndoStepType     =   9,
+		SwitchPartUndoStepTypeV0   =   9,
+		SwitchPartUndoStepType     =  10,
 		InvalidUndoStepType        = 999
 	};
 	
@@ -167,7 +168,7 @@ public:
 	 * 
 	 * @see saveImpl()
 	 */
-	void save(QXmlStreamWriter& xml);
+	void save(QXmlStreamWriter& xml) const;
 	
 protected:	
 	/**

@@ -270,10 +270,8 @@ public:
 	 * 
 	 * @param painter The QPainter used for drawing.
 	 * @param bounding_box Bounding box of area to draw, given in map coordinates.
-	 * @param on_screen If true, uses a cosmetic pen (one pixel wide),
-	 *                  otherwise uses a 0.1 mm wide pen.
 	 */
-	void drawGrid(QPainter* painter, const QRectF& bounding_box, bool on_screen);
+	void drawGrid(QPainter* painter, const QRectF& bounding_box);
 	
 	/**
 	 * Draws the templates with indices first_template until last_template which
@@ -484,6 +482,11 @@ public:
 	
 	/** Returns true if the map contains spot colors. */
 	bool hasSpotColors() const;
+	
+	/**
+	 * Returns true if any visible object uses a non-opaque color.
+	 */
+	bool hasAlpha() const;
 	
 	
 	// Symbols
@@ -782,24 +785,18 @@ public:
 	void setCurrentPartIndex(std::size_t index);
 	
 	/**
-	 * Moves all specified objects from the source to the destination map part.
-	 * 
-	 * The objects will be continuously located at the end to the objects in the target part.
-	 * Source object which were selected will be removed from the object selection.
-	 * 
-	 * @return The index of the first object which has been reassigned.
-	 */
-	std::size_t reassignObjectsToMapPart(std::set<Object*>::const_iterator begin, std::set<Object*>::const_iterator end, std::size_t source, std::size_t destination);
-	
-	/**
 	 * Moves all specified objects from the source to the target map part.
 	 * 
+	 * Objects are processed one by one. This means that processing one object
+	 * changes the index of following objects. Thus the given indices must
+	 * normally be in descending order.
+	 * 
 	 * The objects will be continuously located at the end to the objects in the target part.
 	 * Source object which were selected will be removed from the object selection.
 	 * 
 	 * @return The index of the first object which has been reassigned.
 	 */
-	std::size_t reassignObjectsToMapPart(std::vector<int>::const_iterator begin, std::vector<int>::const_iterator end, std::size_t source, std::size_t destination);
+	int reassignObjectsToMapPart(std::vector<int>::const_iterator first, std::vector<int>::const_iterator last, std::size_t source, std::size_t destination);
 	
 	/**
 	 * Merges the source part with the destination part.
@@ -813,7 +810,7 @@ public:
 	 * 
 	 * @return The index of the first object which has been reassigned.
 	 */
-	std::size_t mergeParts(std::size_t source, std::size_t destination);
+	int mergeParts(std::size_t source, std::size_t destination);
 	
 	
 	// Objects
@@ -873,7 +870,7 @@ public:
 	 *     important for combined symbols, which can be found from a line or
 	 *     an area.
 	 */
-	void findObjectsAt(MapCoordF coord, float tolerance, bool treat_areas_as_paths,
+	void findObjectsAt(const MapCoordF& coord, float tolerance, bool treat_areas_as_paths,
 		bool extended_selection, bool include_hidden_objects,
 		bool include_protected_objects, SelectionInfoVector& out) const;
 	
@@ -882,7 +879,7 @@ public:
 	 * 
 	 * @see Map::findObjectsAt
 	 */
-	void findAllObjectsAt(MapCoordF coord, float tolerance, bool treat_areas_as_paths,
+	void findAllObjectsAt(const MapCoordF& coord, float tolerance, bool treat_areas_as_paths,
 		bool extended_selection, bool include_hidden_objects,
 		bool include_protected_objects, SelectionInfoVector& out) const;
 	
@@ -895,7 +892,7 @@ public:
 	 * @param include_protected_objects Set to true if you want to find protected objects.
 	 * @param out Output parameter. Will be filled with an object list.
 	 */
-	void findObjectsAtBox(MapCoordF corner1, MapCoordF corner2,
+	void findObjectsAtBox(const MapCoordF& corner1, const MapCoordF& corner2,
 		bool include_hidden_objects, bool include_protected_objects,
 		std::vector<Object*>& out) const;
 	

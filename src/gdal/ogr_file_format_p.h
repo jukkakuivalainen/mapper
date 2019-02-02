@@ -20,13 +20,19 @@
 #ifndef OPENORIENTEERING_OGR_FILE_FORMAT_P_H
 #define OPENORIENTEERING_OGR_FILE_FORMAT_P_H
 
+#include <functional>
 #include <memory>
+#include <type_traits>
+#include <vector>
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QFlags>
 #include <QHash>
+#include <QString>
 
 // The GDAL/OGR C API is more stable than the C++ API.
+#include <gdal.h>
 #include <ogr_api.h>
 #include <ogr_srs_api.h>
 
@@ -34,25 +40,25 @@
 #include "core/symbols/symbol.h"
 #include "fileformats/file_import_export.h"
 
-class QFile;
-
 namespace OpenOrienteering {
 
 class AreaSymbol;
 class Georeferencing;
 class LatLon;
 class LineSymbol;
+class Map;
+class MapView;
 class MapColor;
 class MapPart;
 class Object;
 class PathObject;
-class PointObject;
 class PointSymbol;
 class TextSymbol;
 
 
 namespace ogr
 {
+
 	class OGRCoordinateTransformationHDeleter
 	{
 	public:
@@ -68,7 +74,59 @@ namespace ogr
 	 */
 	using unique_transformation = std::unique_ptr<typename std::remove_pointer<OGRCoordinateTransformationH>::type, OGRCoordinateTransformationHDeleter>;
 	
+
+	class OGRDataSourceHDeleter
+	{
+	public:
+		void operator()(OGRDataSourceH data_source) const
+		{
+			OGRReleaseDataSource(data_source);
+		}
+	};
+
+	/** A convenience class for OGR C API datasource handles, similar to std::unique_ptr. */
+	using unique_datasource = std::unique_ptr<typename std::remove_pointer<OGRDataSourceH>::type, OGRDataSourceHDeleter>;
+
+
+	class OGRFeatureHDeleter
+	{
+	public:
+		void operator()(OGRFeatureH feature) const
+		{
+			OGR_F_Destroy(feature);
+		}
+	};
+
+	/** A convenience class for OGR C API feature handles, similar to std::unique_ptr. */
+	using unique_feature = std::unique_ptr<typename std::remove_pointer<OGRFeatureH>::type, OGRFeatureHDeleter>;
+
+
+	class OGRFieldDefnHDeleter
+	{
+	public:
+		void operator()(OGRFieldDefnH field_defn) const
+		{
+			OGR_Fld_Destroy(field_defn);
+		}
+	};
+
+	/** A convenience class for OGR C API field definition handles, similar to std::unique_ptr. */
+	using unique_fielddefn = std::unique_ptr<typename std::remove_pointer<OGRFieldDefnH>::type, OGRFieldDefnHDeleter>;
 	
+
+	class OGRGeometryHDeleter
+	{
+	public:
+		void operator()(OGRGeometryH geometry) const
+		{
+			OGR_G_DestroyGeometry(geometry);
+		}
+	};
+
+	/** A convenience class for OGR C API geometry handles, similar to std::unique_ptr. */
+	using unique_geometry = std::unique_ptr<typename std::remove_pointer<OGRGeometryH>::type, OGRGeometryHDeleter>;
+
+
 	class OGRSpatialReferenceHDeleter
 	{
 	public:
@@ -93,18 +151,27 @@ namespace ogr
 		}
 	};
 	
-	/** A convenience class for OGR C API feature handles, similar to std::unique_ptr. */
+	/** A convenience class for OGR C API style manager handles, similar to std::unique_ptr. */
 	using unique_stylemanager = std::unique_ptr<typename std::remove_pointer<OGRStyleMgrH>::type, OGRStyleMgrHDeleter>;
+
+
+	class OGRStyleTableHDeleter
+	{
+	public:
+		void operator()(OGRStyleTableH table) const
+		{
+			OGR_STBL_Destroy(table);
+		}
+	};
+
+	/** A convenience class for OGR C API style manager handles, similar to std::unique_ptr. */
+	using unique_styletable = std::unique_ptr<typename std::remove_pointer<OGRStyleTableH>::type, OGRStyleTableHDeleter>;
 }
 
 
 
 /**
  * An Importer for geospatial vector data supported by OGR.
- * 
- * OGR needs to know the filename. The filename can be either derived from
- * a QFile passed as stream to the constructor, or set directly through the
- * option "filename".
  * 
  * The option "separate_layers" will cause OGR layers to be imported as distinct
  * map parts if set to true.
@@ -274,6 +341,72 @@ MapCoord OgrFileImport::toMapCoord(double x, double y) const
 {
 	return (this->*to_map_coord)(x, y);
 }
+
+/**
+ * An Exporter to geospatial vector data supported by OGR.
+ *
+ * OGR needs to know the filename. As well, it doesn't use
+ * a QIODevice, but rather uses the filename directly.
+ */
+class OgrFileExport : public Exporter
+{
+	Q_DECLARE_TR_FUNCTIONS(OpenOrienteering::OgrFileExport)
+
+public:
+
+	/**
+	 * Quirks for OGR drivers
+	 *
+	 * Each quirk shall use a distinct bit so that they may be OR-combined.
+	 */
+	enum OgrQuirk
+	{
+		GeorefOptional = 0x01,   ///< The driver does not need or use georeferencing.
+		NeedsWgs84     = 0x02,   ///< The driver needs WGS84 geographic coordinates.
+		SingleLayer    = 0x04,   ///< The driver supports just a single layer.
+		UseLayerField  = 0x08,   ///< Write the symbol names to the layer field.
+	};
+
+	/**
+	 * A type which handles OR-combinations of OGR driver quirks.
+	 */
+	Q_DECLARE_FLAGS(OgrQuirks, OgrQuirk)
+
+	OgrFileExport(const QString& path, const Map *map, const MapView *view);
+	~OgrFileExport() override;
+
+	bool supportsQIODevice() const noexcept override;
+
+	bool exportImplementation() override;
+
+protected:
+	std::vector<const Symbol*> symbolsForExport() const;
+	
+	void addPointsToLayer(OGRLayerH layer, const std::function<bool (const Object*)>& condition);
+	void addTextToLayer(OGRLayerH layer, const std::function<bool (const Object*)>& condition);
+	void addLinesToLayer(OGRLayerH layer, const std::function<bool (const Object*)>& condition);
+	void addAreasToLayer(OGRLayerH layer, const std::function<bool (const Object*)>& condition);
+
+	OGRLayerH createLayer(const char* layer_name, OGRwkbGeometryType type);
+
+	static QByteArray symbolId(const Symbol* symbol) { return QByteArray::number(quint64(symbol), 16); }
+	
+	void populateStyleTable(const std::vector<const Symbol*>& symbols);
+
+	void setupGeoreferencing(GDALDriverH po_driver);
+	void setupQuirks(GDALDriverH po_driver);
+
+private:
+	ogr::unique_datasource po_ds;
+	ogr::unique_fielddefn o_name_field;
+	ogr::unique_srs map_srs;
+	ogr::unique_styletable table;
+	ogr::unique_transformation transformation;
+	
+	const char* symbol_field;
+
+	OgrQuirks quirks;
+};
 
 
 }  // namespace OpenOrienteering

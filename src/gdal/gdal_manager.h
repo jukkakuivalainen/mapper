@@ -1,5 +1,5 @@
 /*
- *    Copyright 2016 Kai Pastor
+ *    Copyright 2016, 2018 Kai Pastor
  *
  *    This file is part of OpenOrienteering.
  *
@@ -53,6 +53,11 @@ public:
 		GPX,
 		OSM
 	};
+
+	enum ExportOption
+	{
+		OneLayerPerSymbol
+	};
 	
 	/**
 	 * Constructs a new manager object.
@@ -66,6 +71,28 @@ public:
 	
 	
 	/**
+	 * Returns the area hatching display setting.
+	 */
+	bool isAreaHatchingEnabled() const;
+	
+	/**
+	 * Sets the area hatching template display setting.
+	 */
+	void setAreaHatchingEnabled(bool enabled);
+	
+	
+	/**
+	 * Returns the baseline view template display setting.
+	 */
+	bool isBaselineViewEnabled() const;
+	
+	/**
+	 * Sets the baseline view template display setting.
+	 */
+	void setBaselineViewEnabled(bool enabled);
+	
+	
+	/**
 	 * Enables or disables handling of a particular file format by GDAL/OGR.
 	 */
 	void setFormatEnabled(FileFormat format, bool enabled);
@@ -75,7 +102,18 @@ public:
 	 */
 	bool isFormatEnabled(FileFormat format) const;
 	
+
+	/**
+	 * Enables or disables an OGR export option
+	 */
+	void setExportOptionEnabled(ExportOption option, bool enabled);
 	
+	/**
+	 * Returns if an OGR export option is enabled
+	 */
+	bool isExportOptionEnabled(ExportOption option) const;
+
+
 	/**
 	 * Returns the file name extensions for supported raster formats.
 	 */
@@ -84,7 +122,12 @@ public:
 	/**
 	 * Returns the file name extensions for supported vector formats.
 	 */
-	const std::vector<QByteArray>& supportedVectorExtensions() const;
+	const std::vector<QByteArray>& supportedVectorImportExtensions() const;
+
+	/**
+	 * Returns the file name extensions for supported vector export formats.
+	 */
+	const std::vector<QByteArray>& supportedVectorExportExtensions() const;
 	
 	
 	/**

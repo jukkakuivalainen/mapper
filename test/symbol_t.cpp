@@ -22,6 +22,7 @@
 #include <Qt>
 #include <QtGlobal>
 #include <QtTest>
+#include <QByteArray>
 #include <QColor>
 #include <QDir>
 #include <QFile>
@@ -33,6 +34,7 @@
 #include <QPoint>
 #include <QRect>
 #include <QRectF>
+#include <QRgb>
 #include <QSize>
 #include <QString>
 
@@ -46,6 +48,10 @@
 using namespace OpenOrienteering;
 
 
+// Uncomment to enable tests which produce unstable results,
+// depending on architecture, compiler, Qt.
+// #define ENABLE_VOLATILE_RENDER_TESTS
+
 namespace
 {
 
@@ -57,17 +63,30 @@ static const auto example_files = {
 
 
 /**
- * Tests if any pixel from the image in the region given by x0, y0, x1, y1 matches
- * the given value.
+ * Tests if any pixel in the image region given by x0, y0, x1, y1
+ * approximately matches the expected value.
  */
-bool anyEqualPixel(const QImage& image, const quint32 value, int x0, int y0, int x1, int y1)
+bool fuzzyComparePixel(const QImage& image, int x0, int y0, int x1, int y1, const quint32 expected)
 {
 	for (int y = y0; y < y1; ++y)
 	{
-		const auto scanline = reinterpret_cast<const quint32*>(image.scanLine(y));
+		const auto* scanline = reinterpret_cast<const quint32*>(image.scanLine(y));
 		for (int x = x0; x < x1; ++x)
 		{
-			if (value == scanline[x])
+			if (scanline[x] == expected)
+				return true;
+		}
+	}
+	for (int y = y0; y < y1; ++y)
+	{
+		const auto* scanline = reinterpret_cast<const quint32*>(image.scanLine(y));
+		for (int x = x0; x < x1; ++x)
+		{
+			const auto actual = scanline[x];
+			if (qAbs(qRed(actual) - qRed(expected)) <= 1
+			    && qAbs(qGreen(actual) - qGreen(expected)) <= 1
+			    && qAbs(qBlue(actual)  - qBlue(expected))  <= 1
+			    && qAbs(qAlpha(actual) - qAlpha(expected)) <= 1)
 				return true;
 		}
 	}
@@ -76,25 +95,43 @@ bool anyEqualPixel(const QImage& image, const quint32 value, int x0, int y0, int
 
 
 /**
- * Tests if the images are equal, ignoring edges which differ in location by one pixel.
+ * Tests if the images are different, ignoring edges which differ in location by one pixel.
+ * 
+ * Returns { -1, -1 } when the images are equal,
+ * the minimum width and height when the images have different sizes,
+ * or the coordinates of the first pixel which does not match (fuzzily).
+ * In the second case, it uses QCOMPARE to output the sizes.
+ * In the last case, it uses QCOMPARE to output the pixel values.
  */
-bool fuzzyEqual(const QImage& lhs, const QImage& rhs)
+QPoint fuzzyDifference(const QImage& lhs, const QImage& rhs)
 {
 	if (lhs.size() != rhs.size())
-		return false;
+	{
+		auto actual_image = lhs.size();
+		auto expected_image = rhs.size();
+		[actual_image, expected_image](){ QCOMPARE(actual_image, expected_image); }();
+		return { qMin(lhs.width(), rhs.width()), qMin(lhs.height(), rhs.height()) };
+	}
 	
 	for (auto y = 0; y < lhs.height(); ++y)
 	{
-		const auto left = reinterpret_cast<const quint32*>(lhs.scanLine(y));
-		const auto right = reinterpret_cast<const quint32*>(rhs.scanLine(y));
+		const auto* left = reinterpret_cast<const quint32*>(lhs.scanLine(y));
+		const auto* right = reinterpret_cast<const quint32*>(rhs.scanLine(y));
 		for (auto x = 0; x < lhs.width(); ++x)
 		{
 			if (Q_UNLIKELY(left[x] != right[x])
-				&& !anyEqualPixel(lhs, right[x], qMax(x-1, 0), qMax(y-1, 0), qMin(x+2, lhs.width()), qMin(y+2, lhs.height())))
-			    return false;
+			    && !fuzzyComparePixel(lhs, qMax(x-1, 0), qMax(y-1, 0), qMin(x+2, lhs.width()), qMin(y+2, lhs.height()), right[x]))
+			{
+				auto actual = QString::number(left[x], 16).toLatin1();
+				auto actual_rgb = actual.constData();
+				auto expected = QString::number(right[x], 16).toLatin1();
+				auto expected_rgb = expected.constData();
+				[actual_rgb, expected_rgb](){ QCOMPARE(actual_rgb, expected_rgb); }();
+				return { x, y };
+			}
 		}
 	}
-	return true;
+	return { -1, -1 };
 }
 
 
@@ -184,27 +221,46 @@ private slots:
 	
 	void renderTest_data()
 	{
-		const auto render_test_files = {
-		    "testdata:symbols/line-symbol-border-variants.omap",
-		    "testdata:symbols/line-symbol-start-end-symbol.omap",
-		    "testdata:symbols/line-symbol-mid-symbol-variants.omap",
+		struct
+		{
+			const char* path;
+			qreal pixel_per_mm;
+		} const render_test_files[] = {
+		    { "testdata:symbols/line-symbol-border-variants.omap", 50 },
+		    { "testdata:symbols/line-symbol-cap-variants.omap", 50 },
+		    { "testdata:symbols/line-symbol-start-end-symbol.omap", 50 },
+		    { "testdata:symbols/line-symbol-mid-symbol-variants.omap", 50 },
+#ifdef ENABLE_VOLATILE_RENDER_TESTS
+		    { "data:examples/complete map.omap", 5 },
+		    { "data:examples/forest sample.omap", 10 },
+#endif  // ENABLE_VOLATILE_RENDER_TESTS
 		};
 		QTest::addColumn<QString>("map_filename");
-		for (auto raw_path : render_test_files)
+		QTest::addColumn<qreal>("pixel_per_mm");
+		for (auto test_file : render_test_files)
 		{
-			QTest::newRow(raw_path) << QString::fromUtf8(raw_path);
+			QTest::newRow(test_file.path) << QString::fromUtf8(test_file.path) << test_file.pixel_per_mm;
 		}
 	}
 	
 	void renderTest()
 	{
 		QFETCH(QString, map_filename);
+		QFETCH(qreal, pixel_per_mm);
 		
 		Map map;
 		QVERIFY(map.loadFrom(map_filename));
 		
+		// Don' test text symbols: text rendering requires more Qt GUI,
+		// and it depends on fonts and platforms.
+		for (auto i = 0; i < map.getNumSymbols(); ++i)
+		{
+			auto* symbol = map.getSymbol(i);
+			if (symbol && symbol->getType() == Symbol::Text)
+				symbol->setIsHelperSymbol(true);
+		}
+		
 		const auto extent = map.calculateExtent().toAlignedRect().adjusted(-1, -1, +1, +1);
-		constexpr auto pixel_per_mm = 50;
 		
 		auto image = QImage{pixel_per_mm * extent.size(), QImage::Format_ARGB32_Premultiplied};
 		image.fill(QColor(Qt::white));
@@ -231,7 +287,7 @@ private slots:
 		QImage expected_image;
 		QVERIFY(expected_image.load(image_filename));
 		image = image.convertToFormat(expected_image.format());
-		QVERIFY(fuzzyEqual(image, expected_image));
+		QCOMPARE(fuzzyDifference(image, expected_image), QPoint(-1,-1));
 		
 #ifdef MAPPER_DEVELOPMENT_BUILD
 		QVERIFY(QFile::remove(out_filename));
@@ -256,7 +312,7 @@ private slots:
 		
 		for (int i = 0; i < map.getNumSymbols(); ++i)
 		{
-			const auto symbol = map.getSymbol(i);
+			const auto* symbol = map.getSymbol(i);
 			
 			MapColor color;
 			QVERIFY(!symbol->containsColor(&color));

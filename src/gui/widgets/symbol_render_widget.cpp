@@ -135,6 +135,9 @@ SymbolRenderWidget::SymbolRenderWidget(Map* map, bool mobile_mode, QWidget* pare
 	protect_action->setCheckable(true);
 	context_menu->addSeparator();
 	
+	show_custom_icons = context_menu->addAction(tr("Show custom icons"), this, SLOT(setCustomIconsVisible(bool)));
+	show_custom_icons->setCheckable(true);
+	
 	QMenu* select_menu = new QMenu(tr("Select symbols"), context_menu);
 	select_menu->addAction(tr("Select all"), this, SLOT(selectAll()));
 	select_menu->addAction(tr("Select unused"), this, SLOT(selectUnused()));
@@ -311,7 +314,7 @@ void SymbolRenderWidget::selectSingleSymbol(int i)
 	emitGuarded_selectedSymbolsChanged();
 }
 
-void SymbolRenderWidget::hover(QPoint pos)
+void SymbolRenderWidget::hover(const QPoint& pos)
 {
 	int i = symbolIndexAt(pos);
 	
@@ -342,7 +345,7 @@ QPoint SymbolRenderWidget::iconPosition(int i) const
 	return QPoint((i % icons_per_row) * icon_size, (i / icons_per_row) * icon_size);
 }
 
-int SymbolRenderWidget::symbolIndexAt(QPoint pos) const
+int SymbolRenderWidget::symbolIndexAt(const QPoint& pos) const
 {
 	int i = -1;
 	
@@ -363,7 +366,7 @@ void SymbolRenderWidget::updateSelectedIcons()
 		updateSingleIcon(symbol_index);
 }
 
-bool SymbolRenderWidget::dropPosition(QPoint pos, int& row, int& pos_in_row)
+bool SymbolRenderWidget::dropPosition(const QPoint& pos, int& row, int& pos_in_row)
 {
 	row = pos.y() / icon_size;
 	if (row >= num_rows)
@@ -831,7 +834,7 @@ void SymbolRenderWidget::deleteSymbols()
 	}
 	
 	// delete symbols in order
-	for (const auto symbol : saved_selection)
+	for (auto* symbol : saved_selection)
 	{
 		if (map->existsObjectWithSymbol(symbol))
 		{
@@ -1024,7 +1027,18 @@ void SymbolRenderWidget::sortByColorPriority()
 	sort(Symbol::lessByColorPriority);
 }
 
-void SymbolRenderWidget::showContextMenu(QPoint global_pos)
+void SymbolRenderWidget::setCustomIconsVisible(bool checked)
+{
+	for (int i = 0; i < map->getNumSymbols(); ++i)
+	{
+		auto symbol = map->getSymbol(i);
+		if (!symbol->getCustomIcon().isNull())
+			symbol->resetIcon();
+	}
+	Settings::getInstance().setSetting(Settings::SymbolWidget_ShowCustomIcons, checked);
+}
+
+void SymbolRenderWidget::showContextMenu(const QPoint& global_pos)
 {
 	updateContextMenuState();
 	context_menu->popup(global_pos);
@@ -1089,6 +1103,8 @@ void SymbolRenderWidget::updateContextMenuState()
 	select_objects_action->setEnabled(have_selection);
 	select_objects_additionally_action->setEnabled(have_selection);
 	deselect_objects_action->setEnabled(have_selection);
+	
+	show_custom_icons->setChecked(Settings::getInstance().getSetting(Settings::SymbolWidget_ShowCustomIcons).toBool());
 }
 
 bool SymbolRenderWidget::newSymbol(Symbol* prototype)

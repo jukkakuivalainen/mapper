@@ -169,6 +169,9 @@ protected:
 	template< class OcdBaseSymbol >
 	void setupBaseSymbol(const Symbol* symbol, quint32 symbol_number, OcdBaseSymbol& ocd_base_symbol);
 	
+	template< class OcdBaseSymbol >
+	void setupIcon(const Symbol* symbol, OcdBaseSymbol& ocd_base_symbol);
+	
 	template< class OcdPointSymbol >
 	QByteArray exportPointSymbol(const PointSymbol* point_symbol);
 	
@@ -227,19 +230,26 @@ protected:
 	void exportGenericCombinedSymbol(OcdFile<Format>& file, const CombinedSymbol* combined_symbol);
 	
 	template< class OcdAreaSymbol >
-	QByteArray exportCombinedAreaSymbol(quint32 symbol_number, const AreaSymbol* area_symbol, const LineSymbol* line_symbol);
+	QByteArray exportCombinedAreaSymbol(
+	        quint32 symbol_number,
+	        const CombinedSymbol* combined_symbol,
+	        const AreaSymbol* area_symbol,
+	        const LineSymbol* line_symbol );
 	
 	template< class OcdLineSymbol >
-	QByteArray exportCombinedLineSymbol(quint32 symbol_number, const LineSymbol* main_line, const LineSymbol* framing, const LineSymbol* double_line);
-	
-	
-	void exportSymbolIconV6(const Symbol* symbol, quint8 icon_bits[]);
-	
-	void exportSymbolIconV9(const Symbol* symbol, quint8 icon_bits[]);
+	QByteArray exportCombinedLineSymbol(
+	        quint32 symbol_number,
+	        const CombinedSymbol* combined_symbol,
+	        const LineSymbol* main_line,
+	        const LineSymbol* framing,
+	        const LineSymbol* double_line );
 	
 	
 	template< class Format >
 	void exportObjects(OcdFile<Format>& file);
+	
+	template< class OcdObject >
+	void handleObjectExtras(const Object* object, OcdObject& ocd_object, typename OcdObject::IndexEntryType& entry);
 	
 	template< class OcdObject >
 	QByteArray exportPointObject(const PointObject* point, typename OcdObject::IndexEntryType& entry);
@@ -272,9 +282,11 @@ protected:
 	
 	quint16 exportCoordinates(const MapCoordVector& coords, const Symbol* symbol, QByteArray& byte_array);
 	
-	quint16 exportTextCoordinatesSingle(const TextObject* object, QByteArray& byte_array);
+	quint16 exportCoordinates(const MapCoordVector& coords, const Symbol* symbol, QByteArray& byte_array, MapCoord& bottom_left, MapCoord& top_right);
 	
-	quint16 exportTextCoordinatesBox(const TextObject* object, QByteArray& byte_array);
+	quint16 exportTextCoordinatesSingle(const TextObject* object, QByteArray& byte_array, MapCoord& bottom_left, MapCoord& top_right);
+	
+	quint16 exportTextCoordinatesBox(const TextObject* object, QByteArray& byte_array, MapCoord& bottom_left, MapCoord& top_right);
 	
 	QByteArray exportTextData(const TextObject* object, int chunk_size, int max_chunks);
 	

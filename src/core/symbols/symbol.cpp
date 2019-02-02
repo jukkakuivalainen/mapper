@@ -25,11 +25,14 @@
 #include <cmath>
 #include <cstddef>
 #include <iterator>
-
 #include <memory>
 
 #include <QtGlobal>
+#include <QBuffer>
+#include <QByteArray>
 #include <QCoreApplication>
+#include <QImageReader>
+#include <QImageWriter>
 #include <QLatin1Char>
 #include <QLatin1String>
 #include <QPainter>
@@ -37,6 +40,7 @@
 #include <QPointF>
 #include <QRectF>
 #include <QStringRef>
+#include <QVariant>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 
@@ -76,6 +80,7 @@ Symbol::Symbol(Type type) noexcept
 
 Symbol::Symbol(const Symbol& proto)
 : icon { proto.icon }
+, custom_icon { proto.custom_icon }
 , name { proto.name }
 , description { proto.description }
 , number ( proto.number )  // Cannot use {} with Android gcc 4.9
@@ -259,6 +264,26 @@ void Symbol::save(QXmlStreamWriter& xml, const Map& map) const
 	if (!description.isEmpty())
 		xml.writeTextElement(QLatin1String("description"), description);
 	saveImpl(xml, map);
+	if (!custom_icon.isNull())
+	{
+		QBuffer buffer;
+		QImageWriter writer{&buffer, QByteArrayLiteral("PNG")};
+		if (writer.write(custom_icon))
+		{
+			auto data = buffer.data().toBase64();
+			// The "data" URL scheme, RFC2397 (https://tools.ietf.org/html/rfc2397)
+			data.insert(0, "data:image/png;base64,");
+			xml.writeCharacters(QLatin1String("\n"));
+			XmlElementWriter icon_element(xml, QLatin1String("icon"));
+			icon_element.writeAttribute(QLatin1String("src"), QString::fromLatin1(data));
+		}
+		else
+		{
+			qDebug("Couldn't save symbol icon '%s': %s",
+			       qPrintable(getPlainTextName()),
+			       qPrintable(writer.errorString()) );
+		}
+	}
 }
 
 std::unique_ptr<Symbol> Symbol::load(QXmlStreamReader& xml, const Map& map, SymbolDictionary& symbol_dict)
@@ -305,7 +330,38 @@ std::unique_ptr<Symbol> Symbol::load(QXmlStreamReader& xml, const Map& map, Symb
 	while (xml.readNextStartElement())
 	{
 		if (xml.name() == QLatin1String("description"))
+		{
 			symbol->description = xml.readElementText();
+		}
+		else if (xml.name() == QLatin1String("icon"))
+		{
+			XmlElementReader icon_element(xml);
+			auto data = icon_element.attribute<QStringRef>(QLatin1String("src")).toLatin1();
+			
+			// The "data" URL scheme, RFC2397 (https://tools.ietf.org/html/rfc2397)
+			auto start = data.indexOf(',') + 1;
+			if (start > 0 && data.startsWith("data:image/"))
+			{
+				auto base64 = data.indexOf(";base64");
+				data = data.remove(0, start);
+				if (base64 + 8 == start)
+					data = QByteArray::fromBase64(data);
+			}
+			else
+			{
+				data.clear();  // Ignore unknown data, warning is generated later.
+			}
+			
+			QBuffer buffer{&data};
+			QImageReader reader{&buffer, QByteArrayLiteral("PNG")};
+			auto icon = reader.read();
+			if (!icon.isNull())
+				symbol->setCustomIcon(icon);
+			else
+				qDebug("Couldn't load symbol icon '%s': %s",
+				       qPrintable(symbol->getPlainTextName()),
+				       qPrintable(reader.errorString()) );
+		}
 		else
 		{
 			if (!symbol->loadImpl(xml, map, symbol_dict))
@@ -381,11 +437,24 @@ bool Symbol::containsSymbol(const Symbol* /*symbol*/) const
 
 
 
+void Symbol::setCustomIcon(const QImage& image)
+{
+	resetIcon();  // Cache must become scaled version of custom icon.
+	custom_icon = image;
+}
+
+
 QImage Symbol::getIcon(const Map* map) const
 {
-	if (icon.isNull() && map)
-		icon = createIcon(*map, Settings::getInstance().getSymbolWidgetIconSizePx());
-	
+	if (icon.isNull())
+	{
+		auto size = Settings::getInstance().getSymbolWidgetIconSizePx();
+		if (Settings::getInstance().getSetting(Settings::SymbolWidget_ShowCustomIcons).toBool()
+		    && !custom_icon.isNull())
+			icon = custom_icon.scaled(size, size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+		else if (map)
+			icon = createIcon(*map, size);
+	}
 	return icon;
 }
 
@@ -447,13 +516,16 @@ QImage Symbol::createIcon(const Map& map, int side_length, bool antialiasing, qr
 		if (type == Line)
 		{
 			auto line = static_cast<const LineSymbol*>(this);
-			if (line->getCapStyle() == LineSymbol::RoundCap)
+			if (!line->isDashed() || line->getBreakLength() <= 0)
 			{
-				offset.setNativeX(-line->getLineWidth()/3);
-			}
-			else if (line->getCapStyle() == LineSymbol::PointedCap)
-			{
-				line_length_half = std::max(line_length_half, 0.0012 * line->getPointedCapLength());
+				if (line->getCapStyle() == LineSymbol::RoundCap)
+				{
+					offset.setNativeX(-line->getLineWidth()/3);
+				}
+				else if (line->getCapStyle() == LineSymbol::PointedCap)
+				{
+					line_length_half = std::max(line_length_half, 0.0006 * (line->startOffset() + line->endOffset()));
+				}
 			}
 			
 			if (line->getDashSymbol() && !line->getDashSymbol()->isEmpty())
@@ -493,7 +565,7 @@ QImage Symbol::createIcon(const Map& map, int side_length, bool antialiasing, qr
 			{
 				auto ideal_length = 2 * line->getDashesInGroup() * line->getDashLength()
 				                    + 2 * (line->getDashesInGroup() - 1) * line->getInGroupBreakLength()
-				                    + line->getBreakLength();
+				                    + 3 * line->getBreakLength() / 2;
 				if (max_ideal_length < ideal_length)
 					max_ideal_length = ideal_length;
 			}
@@ -516,21 +588,38 @@ QImage Symbol::createIcon(const Map& map, int side_length, bool antialiasing, qr
 			}
 			if (max_ideal_length > 0)
 			{
+				auto cap_length = 0;
+				auto offset_factor = qreal(0);
 				auto ideal_length_half = qreal(max_ideal_length) / 2000;
+				
+				if (line->getCapStyle() == LineSymbol::PointedCap)
+				{
+					offset_factor = 1;
+					ideal_length_half += qreal(line->startOffset() + line->endOffset()) / 2000;
+				}
+				else if (line->getCapStyle() != LineSymbol::FlatCap)
+				{
+					cap_length = line->getLineWidth();
+					ideal_length_half += qreal(cap_length) / 1000;
+				}
+				
 				auto factor = qMin(qreal(0.5), line_length_half / qMax(qreal(0.001), ideal_length_half));
+				offset_factor *= factor;
 				
 				if (!symbol_copy)
 					symbol_copy = duplicate(*line);
 				
 				auto icon_line = static_cast<LineSymbol*>(symbol_copy.get());
 				icon_line->setDashLength(qRound(factor * icon_line->getDashLength()));
-				icon_line->setBreakLength(qRound(factor * icon_line->getBreakLength()));
+				icon_line->setBreakLength(cap_length + qRound(factor * (icon_line->getBreakLength() - cap_length)));
 				icon_line->setInGroupBreakLength(qRound(factor * icon_line->getInGroupBreakLength()));
 				icon_line->setShowAtLeastOneSymbol(true);
 				icon_line->getBorder().dash_length *= factor;
 				icon_line->getBorder().break_length *= factor;
 				icon_line->getRightBorder().dash_length *= factor;
 				icon_line->getRightBorder().break_length *= factor;
+				icon_line->setStartOffset(qRound(offset_factor * icon_line->startOffset()));
+				icon_line->setEndOffset(qRound(offset_factor * icon_line->endOffset()));
 			}
 		}
 		else if (type == Combined)
@@ -635,6 +724,9 @@ QImage Symbol::createIcon(const Map& map, int side_length, bool antialiasing, qr
 	auto w = std::max(std::abs(extent.left()), std::abs(extent.right()));
 	auto h = std::max(std::abs(extent.top()), std::abs(extent.bottom()));
 	auto real_icon_mm_half = std::max(w, h);
+	if (real_icon_mm_half <= 0)
+		return image;
+	
 	auto final_zoom = side_length * zoom * std::min(qreal(1), max_icon_mm_half / real_icon_mm_half);
 	painter.scale(final_zoom, final_zoom);
 	

@@ -1,5 +1,5 @@
 /*
- *    Copyright 2016-2017 Kai Pastor
+ *    Copyright 2016-2018 Kai Pastor
  *
  *    This file is part of OpenOrienteering.
  *
@@ -36,16 +36,17 @@
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 
+#include "settings.h"
 #include "core/georeferencing.h"
 #include "core/latlon.h"
 #include "core/map.h"
 #include "core/map_coord.h"
+#include "core/track.h"
 #include "core/objects/object.h"
 #include "fileformats/file_format.h"
 #include "gdal/gdal_manager.h"
 #include "gdal/ogr_file_format_p.h"
 #include "gui/georeferencing_dialog.h"
-#include "sensors/gps_track.h"
 #include "templates/template.h"
 #include "templates/template_positioning_dialog.h"
 #include "templates/template_track.h"
@@ -107,14 +108,15 @@ namespace {
 
 const std::vector<QByteArray>& OgrTemplate::supportedExtensions()
 {
-	return GdalManager().supportedVectorExtensions();
+	return GdalManager().supportedVectorImportExtensions();
 }
 
 
 OgrTemplate::OgrTemplate(const QString& path, Map* map)
 : TemplateMap(path, map)
 {
-	// nothing else
+	connect(&Settings::getInstance(), &Settings::settingsChanged, this, &OgrTemplate::applySettings);
+	
 	const Georeferencing& georef = map->getGeoreferencing();
 	connect(&georef, &Georeferencing::projectionChanged, this, &OgrTemplate::mapTransformationChanged);
 	connect(&georef, &Georeferencing::transformationChanged, this, &OgrTemplate::mapTransformationChanged);
@@ -252,6 +254,9 @@ try
 	auto new_template_map = std::make_unique<Map>();
 	auto unit_type = use_real_coords ? OgrFileImport::UnitOnGround : OgrFileImport::UnitOnPaper;
 	OgrFileImport importer{template_path, new_template_map.get(), nullptr, unit_type };
+	
+	// Configure generation of renderables.
+	updateView(*new_template_map);
 	
 	const auto& map_georef = map->getGeoreferencing();
 	
@@ -444,6 +449,39 @@ void OgrTemplate::reload()
 		unloadTemplateFile();
 	loadTemplateFile(false);
 	reload_pending = false;
+}
+
+
+
+void OgrTemplate::applySettings()
+{
+	if (auto* template_map = templateMap())
+		updateView(*template_map);
+}
+
+void OgrTemplate::updateView(Map& template_map)
+{
+	GdalManager manager;
+	const auto enable_hatching = manager.isAreaHatchingEnabled();
+	const auto enable_baseline = manager.isBaselineViewEnabled();
+	
+	bool dirty = false;
+	if (template_map.isAreaHatchingEnabled() != enable_hatching)
+	{
+		template_map.setAreaHatchingEnabled(enable_hatching);
+		dirty = true;
+	}
+	if (template_map.isBaselineViewEnabled() != enable_baseline)
+	{
+		template_map.setBaselineViewEnabled(enable_baseline);
+		dirty = true;
+	}
+	
+	if (dirty && templateMap() == &template_map)
+	{
+		template_map.updateAllObjects();
+		setTemplateAreaDirty();
+	}
 }
 
 

@@ -20,10 +20,8 @@
 
 #include "georeferencing.h"
 
-#include <cstddef>
 #include <algorithm>
 #include <iterator>
-#include <utility>
 
 #include <QtGlobal>
 #include <QByteArray>
@@ -510,7 +508,7 @@ void Georeferencing::setDeclinationAndGrivation(double declination, double griva
 	}
 }
 
-void Georeferencing::setMapRefPoint(MapCoord point)
+void Georeferencing::setMapRefPoint(const MapCoord& point)
 {
 	if (map_ref_point != point)
 	{
@@ -519,7 +517,7 @@ void Georeferencing::setMapRefPoint(MapCoord point)
 	}
 }
 
-void Georeferencing::setProjectedRefPoint(QPointF point, bool update_grivation)
+void Georeferencing::setProjectedRefPoint(const QPointF& point, bool update_grivation)
 {
 	if (projected_ref_point != point || state == Normal)
 	{

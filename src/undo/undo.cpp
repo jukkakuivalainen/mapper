@@ -79,6 +79,8 @@ UndoStep* UndoStep::getUndoStepForType(Type type, Map* map)
 		
 	default:
 		qWarning("Undefined undo step type");
+		// fall through
+	case SwitchPartUndoStepTypeV0:
 		return new NoOpUndoStep(map, false);
 	}
 }
@@ -125,7 +127,7 @@ UndoStep* UndoStep::load(QXmlStreamReader& xml, Map* map, SymbolDictionary& symb
 	return step;
 }
 
-void UndoStep::save(QXmlStreamWriter& xml)
+void UndoStep::save(QXmlStreamWriter& xml) const
 {
 	XmlElementWriter element(xml, QLatin1String("step"));
 	element.writeAttribute(QLatin1String("type"), type);
@@ -157,7 +159,7 @@ CombinedUndoStep::CombinedUndoStep(Map* map)
 
 CombinedUndoStep::~CombinedUndoStep()
 {
-	for (const auto step : steps)
+	for (auto* step : steps)
 		delete step;
 }
 
@@ -180,7 +182,7 @@ UndoStep* CombinedUndoStep::undo()
 
 bool CombinedUndoStep::getModifiedParts(PartSet &out) const
 {
-	for (const auto step : steps)
+	for (const auto* step : steps)
 	{
 		step->getModifiedParts(out);
 	}
@@ -189,7 +191,7 @@ bool CombinedUndoStep::getModifiedParts(PartSet &out) const
 
 void CombinedUndoStep::getModifiedObjects(int part_index, ObjectSet &out) const
 {
-	for (const auto step : steps)
+	for (const auto* step : steps)
 	{
 		step->getModifiedObjects(part_index, out);
 	}
@@ -205,7 +207,7 @@ void CombinedUndoStep::saveImpl(QXmlStreamWriter& xml) const
 	// (A barrier element prevents older versions from loading this element.)
 	XmlElementWriter steps_element(xml, literal::steps);
 	steps_element.writeAttribute(XmlStreamLiteral::count, steps.size());
-	for (const auto step : steps)
+	for (const auto* step : steps)
 		step->save(xml);
 }
 

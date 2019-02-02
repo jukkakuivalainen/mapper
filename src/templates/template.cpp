@@ -604,6 +604,20 @@ void Template::unloadTemplateFile()
 	emit templateStateChanged();
 }
 
+
+// virtual
+bool Template::canChangeTemplateGeoreferenced()
+{
+	return false;
+}
+
+// virtual
+bool Template::trySetTemplateGeoreferenced(bool /*value*/, QWidget* /*dialog_parent*/)
+{
+	return is_georeferenced;
+}
+
+
 void Template::applyTemplateTransform(QPainter* painter) const
 {
 	painter->translate(transform.template_x / 1000.0, transform.template_y / 1000.0);
@@ -773,6 +787,15 @@ void Template::setAdjustmentDirty(bool value)
 		map->setTemplatesDirty();
 }
 
+
+
+bool Template::hasAlpha() const
+{
+	return template_state == Template::Loaded;
+}
+
+
+
 const std::vector<QByteArray>& Template::supportedExtensions()
 {
 	static std::vector<QByteArray> extensions;
@@ -855,7 +878,7 @@ MapCoord Template::templatePosition() const
 }
 
 
-void Template::setTemplatePosition(MapCoord coord)
+void Template::setTemplatePosition(const MapCoord& coord)
 {
 	transform.template_x = coord.nativeX();
 	transform.template_y = coord.nativeY();
@@ -867,7 +890,7 @@ MapCoord Template::templatePositionOffset() const
 	return accounted_offset;
 }
 
-void Template::setTemplatePositionOffset(MapCoord offset)
+void Template::setTemplatePositionOffset(const MapCoord& offset)
 {
 	const auto move = accounted_offset - offset;
 	if (move != MapCoord{})

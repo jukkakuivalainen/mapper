@@ -1,5 +1,5 @@
 /*
- *    Copyright 2016-2017 Kai Pastor
+ *    Copyright 2016-2018 Kai Pastor
  *
  *    This file is part of OpenOrienteering.
  *
@@ -65,7 +65,7 @@ public:
 	 * Loads the geospatial vector data into the template_map.
 	 * 
 	 * If is_georereferenced is true, the template_map will be configured to use
-	 * the georeferencing of the map given in the constructor, and OgrFileFormat
+	 * the georeferencing of the map given in the constructor, and OgrFileImportFormat
 	 * will let OGR do coordinate transformations as needed.
 	 * 
 	 * If is_georeferenced is false and an explicit_georef is defined, the
@@ -85,7 +85,11 @@ protected:
 protected slots:
 	void reload();
 	
+	void applySettings();
+	
 protected:
+	void updateView(Map& template_map);
+	
 	void mapProjectionChanged();
 	
 	void mapTransformationChanged();

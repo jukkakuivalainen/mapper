@@ -1,6 +1,6 @@
 /*
  *    Copyright 2012, 2013 Thomas Schöps
- *    Copyright 2014-2016  Kai Pastor
+ *    Copyright 2014-2018  Kai Pastor
  *
  *    This file is part of OpenOrienteering.
  *
@@ -63,6 +63,16 @@ namespace literal
 
 namespace OpenOrienteering {
 
+// ### TemplateVisibility ###
+
+bool TemplateVisibility::hasAlpha() const
+{
+	return visible && opacity > 0 && opacity < 1;
+}
+
+
+// ### MapView ###
+
 const double MapView::zoom_in_limit = 512;
 const double MapView::zoom_out_limit = 1 / 16.0;
 
@@ -98,9 +108,9 @@ MapView::~MapView()
 
 void MapView::save(QXmlStreamWriter& xml, const QLatin1String& element_name, bool template_details) const
 {
+	// We do not save transient attributes such as rotation (for compass) or pan offset.
 	XmlElementWriter mapview_element(xml, element_name);
 	mapview_element.writeAttribute(literal::zoom, zoom);
-	mapview_element.writeAttribute(literal::rotation, rotation);
 	mapview_element.writeAttribute(literal::position_x, center_pos.nativeX());
 	mapview_element.writeAttribute(literal::position_y, center_pos.nativeY());
 	mapview_element.writeAttribute(literal::grid, grid_visible);
@@ -131,11 +141,11 @@ void MapView::save(QXmlStreamWriter& xml, const QLatin1String& element_name, boo
 
 void MapView::load(QXmlStreamReader& xml)
 {
+	// We do not load transient attributes such as rotation (for compass) or pan offset.
 	XmlElementReader mapview_element(xml);
 	zoom = qMin(mapview_element.attribute<double>(literal::zoom), zoom_in_limit);
 	if (zoom < zoom_out_limit)
 		zoom = 1.0;
-	rotation = mapview_element.attribute<double>(literal::rotation);
 	
 	auto center_x = mapview_element.attribute<qint64>(literal::position_x);
 	auto center_y = mapview_element.attribute<qint64>(literal::position_y);
@@ -202,28 +212,14 @@ void MapView::updateAllMapWidgets()
 	emit visibilityChanged(MultipleFeatures, true);
 }
 
-MapCoord MapView::viewToMap(double x, double y) const
+QPointF MapView::mapToView(const MapCoord& coords) const
 {
-	return MapCoord(view_to_map.m11() * x + view_to_map.m12() * y + view_to_map.m13(),
-	                view_to_map.m21() * x + view_to_map.m22() * y + view_to_map.m23());
+	return map_to_view.map(MapCoordF(coords));
 }
 
-MapCoordF MapView::viewToMapF(double x, double y) const
+QPointF MapView::mapToView(const QPointF& coords) const
 {
-	return MapCoordF(view_to_map.m11() * x + view_to_map.m12() * y + view_to_map.m13(),
-	                 view_to_map.m21() * x + view_to_map.m22() * y + view_to_map.m23());
-}
-
-QPointF MapView::mapToView(MapCoord coords) const
-{
-	return QPointF(map_to_view.m11() * coords.x() + map_to_view.m12() * coords.y() + map_to_view.m13(),
-	               map_to_view.m21() * coords.x() + map_to_view.m22() * coords.y() + map_to_view.m23());
-}
-
-QPointF MapView::mapToView(MapCoordF coords) const
-{
-	return QPointF(map_to_view.m11() * coords.x() + map_to_view.m12() * coords.y() + map_to_view.m13(),
-	               map_to_view.m21() * coords.x() + map_to_view.m22() * coords.y() + map_to_view.m23());
+	return map_to_view.map(coords);
 }
 
 qreal MapView::lengthToPixel(qreal length) const
@@ -264,7 +260,7 @@ QRectF MapView::calculateViewBoundingBox(QRectF rect) const
 	return rect;
 }
 
-void MapView::setPanOffset(QPoint offset)
+void MapView::setPanOffset(const QPoint& offset)
 {
 	if (offset != pan_offset)
 	{
@@ -273,7 +269,7 @@ void MapView::setPanOffset(QPoint offset)
 	}
 }
 
-void MapView::finishPanning(QPoint offset)
+void MapView::finishPanning(const QPoint& offset)
 {
 	setPanOffset({0,0});
 	try
@@ -291,7 +287,7 @@ void MapView::finishPanning(QPoint offset)
 	}
 }
 
-void MapView::zoomSteps(double num_steps, QPointF cursor_pos_view)
+void MapView::zoomSteps(double num_steps, const QPointF& cursor_pos_view)
 {
 	auto zoom_to = getZoom() * pow(sqrt(2.0), num_steps);
 	setZoom(zoom_to, cursor_pos_view);
@@ -303,7 +299,7 @@ void MapView::zoomSteps(double num_steps)
 	setZoom(zoom_to);
 }
 
-void MapView::setZoom(double value, QPointF center)
+void MapView::setZoom(double value, const QPointF& center)
 {
 	auto pos = this->center();
 	auto zoom_pos = viewToMap(center);
@@ -332,7 +328,7 @@ void MapView::setRotation(double value)
 	emit viewChanged(RotationChange);
 }
 
-void MapView::setCenter(MapCoord pos)
+void MapView::setCenter(const MapCoord& pos)
 {
 	center_pos = pos;
 	updateTransform();
@@ -348,11 +344,11 @@ void MapView::updateTransform()
 	auto center_y = center_pos.y();
 	
 	// Create map_to_view
-	map_to_view.setMatrix(final_zoom_cosr, -final_zoom_sinr, -final_zoom_cosr * center_x + final_zoom_sinr * center_y,
-	                      final_zoom_sinr,  final_zoom_cosr, -final_zoom_sinr * center_x - final_zoom_cosr * center_y,
-	                      0, 0, 1);
-	view_to_map     = map_to_view.inverted();
-	world_transform = map_to_view.transposed();
+	map_to_view = { final_zoom_cosr,  final_zoom_sinr,
+	                -final_zoom_sinr, final_zoom_cosr,
+	                -final_zoom_cosr * center_x + final_zoom_sinr * center_y,
+	                -final_zoom_sinr * center_x - final_zoom_cosr * center_y };
+	view_to_map = map_to_view.inverted();
 }
 
 
@@ -477,6 +473,28 @@ void MapView::setOverprintingSimulationEnabled(bool enabled)
 		overprinting_simulation_enabled = enabled;
 		emit visibilityChanged(VisibilityFeature::OverprintingEnabled, enabled);
 	}
+}
+
+
+
+bool MapView::hasAlpha() const
+{
+	auto map_visibility = effectiveMapVisibility();
+	if (map_visibility.hasAlpha() || map->hasAlpha())
+		return true;
+	
+	if (grid_visible && map->getGrid().hasAlpha())
+		return true;
+		
+	for (int i = 0; i < map->getNumTemplates(); ++i)
+	{
+		auto temp = map->getTemplate(i);
+		auto visibility = getTemplateVisibility(temp);
+		if (visibility.hasAlpha() || temp->hasAlpha())
+			return true;
+	}
+	
+	return false;
 }
 
 
